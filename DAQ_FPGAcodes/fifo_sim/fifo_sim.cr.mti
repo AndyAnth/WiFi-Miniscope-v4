@@ -1,0 +1,29 @@
+E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_spi_slave.v {1 {vlog -work work -vopt -stats=none E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_spi_slave.v
+Model Technology ModelSim SE-64 vlog 10.5 Compiler 2016.02 Feb 13 2016
+-- Compiling module tb_spi_slave
+
+Top level modules:
+	tb_spi_slave
+
+} {} {}} E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/async_fifo.v {1 {vlog -work work -vopt -stats=none E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/async_fifo.v
+Model Technology ModelSim SE-64 vlog 10.5 Compiler 2016.02 Feb 13 2016
+-- Compiling module fifo_async
+
+Top level modules:
+	fifo_async
+
+} {} {}} E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v {1 {vlog -work work -vopt -stats=none E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v
+Model Technology ModelSim SE-64 vlog 10.5 Compiler 2016.02 Feb 13 2016
+-- Compiling module fifo_async_tb
+
+Top level modules:
+	fifo_async_tb
+
+} {} {}} E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/spi_slave.v {1 {vlog -work work -vopt -stats=none E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/spi_slave.v
+Model Technology ModelSim SE-64 vlog 10.5 Compiler 2016.02 Feb 13 2016
+-- Compiling module spi_slave
+
+Top level modules:
+	spi_slave
+
+} {} {}}

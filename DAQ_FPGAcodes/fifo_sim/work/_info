@@ -1,0 +1,151 @@
+m255
+K4
+z2
+!s11f vlog 2020.1 2020.02, Feb 28 2020
+13
+!s112 1.1
+!i10d 8192
+!i10e 25
+!i10f 100
+cModel Technology
+Z0 dD:/Modelsim
+T_opt
+!s110 1699110234
+V9I>9Phm]z^ikfa^IjUAE21
+04 13 4 work fifo_async_tb fast 0
+=1-3005057c8ad5-65465d58-1c5-41e8
+o-quiet -auto_acc_if_foreign -work work +acc
+Z1 tCvgOpt 0
+n@_opt
+OL;O;10.5;63
+R0
+vasyn_fifo_tb
+!s110 1699060968
+!i10b 1
+!s100 Fz6XzeIhP`Sn7=KcKgC3R0
+Z2 !s11b Dg1SIo80bB@j0V0VzS_@n1
+I30hVF3;R>VZB]?Zb8VkVE2
+Z3 VDg1SIo80bB@j0V0VzS_@n1
+Z4 dE:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/fifo_sim
+w1699060906
+Z5 8E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v
+Z6 FE:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v
+!i122 22
+L0 68 84
+Z7 OV;L;2020.1;71
+r1
+!s85 0
+31
+!s108 1699060968.000000
+Z8 !s107 E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v|
+Z9 !s90 -reportprogress|300|-work|work|-stats=none|E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v|
+!i113 1
+Z10 o-work work
+R1
+vfifo_async
+Z11 !s110 1699144350
+!i10b 1
+!s100 XJPUXNLLa9iJhVJXNDHn_3
+I;KRVNcLl;[oPH3[^o]LhK0
+R3
+R4
+w1699072918
+8E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/async_fifo.v
+FE:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/async_fifo.v
+L0 233
+Z12 OL;L;10.5;63
+r1
+!s85 0
+31
+!s108 1699144349.000000
+!s107 E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/async_fifo.v|
+!s90 -reportprogress|300|-work|work|-vopt|-stats=none|E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/async_fifo.v|
+!i113 0
+R10
+R1
+vfifo_async_tb
+R11
+!i10b 1
+!s100 4;BHd5zVjRbWGc7ClOR_j0
+IIi1Ezo9oi:i3X2KP615Zf2
+R3
+R4
+w1699076412
+R5
+R6
+L0 145
+R12
+r1
+!s85 0
+31
+!s108 1699144350.000000
+R8
+!s90 -reportprogress|300|-work|work|-vopt|-stats=none|E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_asycn_fifo.v|
+!i113 0
+R10
+R1
+vspi_slave
+Z13 !s110 1699144351
+!i10b 1
+!s100 zAZ`JIOWHO814F<86B];[3
+IiKX0I9TRgoRZM7>8lMo<j1
+R3
+R4
+w1699143980
+8E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/spi_slave.v
+FE:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/spi_slave.v
+L0 3
+R12
+r1
+!s85 0
+31
+Z14 !s108 1699144351.000000
+!s107 E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/spi_slave.v|
+!s90 -reportprogress|300|-work|work|-vopt|-stats=none|E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/spi_slave.v|
+!i113 0
+R10
+R1
+vtb_async_fifo
+!s110 1699071660
+!i10b 1
+!s100 VCfagd?HLd?Nh`FzYjzEC2
+R2
+IX]meRQ:jNMIOGVQ_igSL32
+R3
+R4
+w1699071600
+R5
+R6
+!i122 37
+L0 3 64
+R7
+r1
+!s85 0
+31
+!s108 1699071660.000000
+R8
+R9
+!i113 1
+R10
+R1
+vtb_spi_slave
+R13
+!i10b 1
+!s100 ^X5fQ`hKBmPi`mYPHe[=U0
+IdY1m=5jVQMLTlh_Ylh]=B3
+R3
+R4
+w1698918468
+8E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_spi_slave.v
+FE:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_spi_slave.v
+L0 3
+R12
+r1
+!s85 0
+31
+R14
+!s107 E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_spi_slave.v|
+!s90 -reportprogress|300|-work|work|-vopt|-stats=none|E:/37_spi_flash/spi_flash_erase/spi_flash_be/spi_slave/tb_spi_slave.v|
+!i113 0
+R10
+R1
