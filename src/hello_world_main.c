@@ -21,18 +21,33 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_pm.h"
+#include "esp32s3/rom/ets_sys.h"
+#include "driver/i2c.h"
+#include "definitions.h"
+#include "PYTHON480.h"
+#include "SPI_BB_PYTHON480.h"
 
 #define GPIO_HANDSHAKE 2
 #define GPIO_MOSI 13
 #define GPIO_MISO 12
 #define GPIO_SCLK 14
 #define GPIO_CS 15
+
+//CMOS控制信号
+#define GPIO_BB_MOSI 35
+#define GPIO_BB_MISO 36
+#define GPIO_BB_SCLK 37
+#define GPIO_BB_CS 38
+
 #define GPIO_BACK 10	//上升沿中断信号
 #define GPIO_TEST 9
 #define GPIO_TEST1 3
 #define GPIO_TEST2 4
 #define GPIO_TEST3 5
+#define GPIO_ENT1 6
+#define GPIO_STATUS_LED 7
 #define SENDER_HOST SPI2_HOST
+#define CMOSCTRL_HOST SPI3_HOST
 
 //I2C Slave Address
 #define DATA_LENGTH 512                  /*!< Data buffer length of test buffer */
@@ -41,7 +56,7 @@
 
 #define I2C_MASTER_SCL_IO 2               /*!< gpio number for I2C master clock */
 #define I2C_MASTER_SDA_IO 1               /*!< gpio number for I2C master data  */
-#define I2C_MASTER_NUM I2C_NUMBER(CONFIG_I2C_MASTER_PORT_NUM) /*!< I2C port number for master dev */
+#define I2C_MASTER_NUM 1 /*!< I2C port number for master dev */ //这写成1不知道对不对
 #define I2C_MASTER_FREQ_HZ 100000        /*!< I2C master clock frequency */
 #define I2C_MASTER_TX_BUF_DISABLE 0                           /*!< I2C master doesn't need buffer */
 #define I2C_MASTER_RX_BUF_DISABLE 0                           /*!< I2C master doesn't need buffer */
@@ -65,7 +80,6 @@
 #define IVRA_REG 0x00
 #define ACR_REG 0x10	
 
-
 //WIFI及TCP参数
 #define EXAMPLE_ESP_WIFI_SSID "HUAWEI-TEST"
 #define EXAMPLE_ESP_WIFI_PASS "12345678"
@@ -74,6 +88,7 @@ int  port = 5001;
 
 //SPI传输BUF尺寸定义
 #define SPI_BUF_SIZE 38192
+#define SPI_BB_BUF_SIZE 25  //CMOS控制信号的传输位宽
 
 //I2C传输BUF尺寸定义
 #define I2C_BUF_SIZE 3
@@ -95,15 +110,21 @@ static EventGroupHandle_t s_wifi_event_group;
 static char sendbuf[SPI_BUF_SIZE] = {0};
 static char recvbuf[SPI_BUF_SIZE] = {0};
 
+static char cmos_sendbuf[SPI_BUF_SIZE] = {0};
+static char cmos_recvbuf[SPI_BUF_SIZE] = {0};
+
+
 //ctrl signal
-static char ctrlbuf[5] = {0};	//EWL_LSB, EWL_MSB, ACR_CONFIG, IVRA_CONFIG, CTRLCODE
+static char ctrlbuf[8] = {0};	//EWL_LSB, EWL_MSB, ACR_CONFIG, IVRA_CONFIG, ENT1, GAIN_VALUE, STATUS_LED, CTRLCODE
 static char EWL_LSB = {0};	//EWL is for I2C bus
 static char EWL_MSB = {0};
 static char ACR_CONFIG = {0};
 static char IVRA_CONFIG = {0};
-static char CTRLCODE = {0};		//控制信号标志位, 0-DATA, 1-EWL, 2-LED, 3-CMOS
+//static char CTRLCODE = {0};		//SPI/I2C TASK控制信号标志位, 0-DATA, 1-EWL, 2-LED, 3-CMOS,
 
 //static QueueHandle_t rdySem;
+
+static const char *TAG = "ERROR";
 
 static TaskHandle_t wifisend;
 static TaskHandle_t spi;
@@ -123,6 +144,140 @@ static void IRAM_ATTR gpio_handshake_isr_handler(void *arg) {
 
 	portYIELD_FROM_ISR();
 
+}
+
+/**
+ * initialize i2c bus
+ * _______________________________________________________________________________________
+ * | start | slave_addr + rd_bit + ack | register_addr + ack  | write 1 byte + ack | stop |
+ * --------|---------------------------|----------------------|--------------------|------|
+ * release i2c bus
+ */
+static esp_err_t i2c_MAX14547(i2c_port_t i2c_num)
+{ 
+    int ret;
+	EWL_LSB = ctrlbuf[0]; 	//OIS_LSB
+	EWL_MSB = ctrlbuf[1]; 	//LLV1
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (MAX14547_WRITE_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);	//发送从机地址+写标志信号
+	i2c_master_write_byte(cmd, OSI_LSB_ADDR, ACK_CHECK_EN);	//发送寄存器地址,寄存器地址会自增
+    i2c_master_write_byte(cmd, EWL_LSB, ACK_CHECK_EN);		//发送控制信号
+	i2c_master_write_byte(cmd, EWL_MSB, ACK_CHECK_EN);		//发送控制信号
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
+    i2c_cmd_link_delete(cmd);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+}
+
+/**
+ * initialize i2c bus
+ * _______________________________________________________________________________________
+ * | start | slave_addr + rd_bit + ack | register_addr + ack  | write 1 byte + ack | stop |
+ * --------|---------------------------|----------------------|--------------------|------|
+ * release i2c bus
+ * 
+ * initialize i2c bus
+ * _______________________________________________________________________________________
+ * | start | slave_addr + rd_bit + ack | register_addr + ack  | write 1 byte + ack | stop |
+ * --------|---------------------------|----------------------|--------------------|------|
+ * release i2c bus
+ */
+static esp_err_t i2c_TPL0102(i2c_port_t i2c_num)
+{ 
+    int ret;
+	ACR_CONFIG = ctrlbuf[2]; 	//ACR
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (TPL0102_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);	//发送从机地址+写标志信号
+	i2c_master_write_byte(cmd, ACR_REG, ACK_CHECK_EN);	//发送寄存器地址,寄存器地址会自增
+    i2c_master_write_byte(cmd, ACR_CONFIG, ACK_CHECK_EN);		//发送控制信号
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
+    i2c_cmd_link_delete(cmd);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+	//这里不确定寄存器地址写满以后会不会从头开始，因此分别进行两次传输
+	IVRA_CONFIG = ctrlbuf[3]; 	//IVRA
+	cmd = i2c_cmd_link_create();	//上面delete了cmd不知道这里是否需要重新建立
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (TPL0102_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);	//发送从机地址+写标志信号
+	i2c_master_write_byte(cmd, IVRA_REG, ACK_CHECK_EN);	//发送寄存器地址,寄存器地址会自增
+    i2c_master_write_byte(cmd, IVRA_CONFIG, ACK_CHECK_EN);		//发送控制信号
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
+    i2c_cmd_link_delete(cmd);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+}
+
+static void ent1_ctrl(void){
+	if(ctrlbuf[5] == '1'){
+		gpio_set_level(GPIO_ENT1, 1);	//使能CMOS的LED光源
+	}
+	else{
+		gpio_set_level(GPIO_ENT1, 0);	//熄灭CMOS的LED光源
+	}
+}
+
+static void status_led_ctrl(void){
+	if(ctrlbuf[7] == '1'){
+		gpio_set_level(GPIO_STATUS_LED, 1);	//使能状态指示灯
+	}
+	else{
+		gpio_set_level(GPIO_STATUS_LED, 0);	//熄灭状态指示灯
+	}
+}
+
+static void set_gain_value(void){
+
+	switch(ctrlbuf[8]){
+		case '1':
+			spi_BB_Write(204, 0x00E1);
+			break;
+		case '2':
+			spi_BB_Write(204, 0x00E4);
+			break;
+		case '3':
+			spi_BB_Write(204, 0x0024);
+			break;
+	}
+}
+
+static void spi_BB_Write(uint16_t address, uint16_t value){
+
+	esp_err_t ret;
+	
+	spi_device_handle_t handle;
+
+	spi_transaction_t t;
+
+	//Initialize the SPI bus and add the device we want to send stuff to.
+	ret = spi_bus_initialize(CMOSCTRL_HOST, &buscfg, SPI_DMA_CH_AUTO);
+	assert(ret==ESP_OK);
+	ret = spi_bus_add_device(CMOSCTRL_HOST, &devcfg, &handle);
+	assert(ret==ESP_OK);
+
+	while(1){
+
+		t.length = sizeof(cmos_sendbuf) * 8;  //可能是在这里控制传输总数据量来控制传输起止
+		t.tx_buffer = cmos_sendbuf; 
+		t.rx_buffer = cmos_recvbuf;
+		
+		//下面的逻辑是，在WiFi返回的控制信号有效时进入I2C传输，若检测到无效就开启SPI传输
+		ulTaskNotifyTake(spi,portMAX_DELAY);  //检查前面给出的Notify信号量
+		switch(ctrlbuf[8]){
+			case '0':	//正常SPI传输
+				gpio_set_level(GPIO_TEST1,1);
+				ret = spi_device_transmit(handle, &t);  //这里准备把每包数据设为608*10*8，也就是八行数据一包
+				break;
+		}
+	}
 }
 
 static void event_handler(void *arg, esp_event_base_t event_base,int32_t event_id, void *event_data) {
@@ -229,7 +384,6 @@ void wifi_init_sta(void) {
 	// vEventGroupDelete(s_wifi_event_group);
 }
 
-
 static void spi_task(void *pvParameters){
 
 	gpio_config_t io_conf_handshake = {
@@ -245,22 +399,12 @@ static void spi_task(void *pvParameters){
 	gpio_set_intr_type(GPIO_HANDSHAKE, GPIO_INTR_POSEDGE);
 	gpio_isr_handler_add(GPIO_HANDSHAKE, gpio_handshake_isr_handler, NULL);
 
-	gpio_config_t io_conf_test1 = {
-		.intr_type = GPIO_INTR_DISABLE,    
-		.mode = GPIO_MODE_OUTPUT,
-		.pull_down_en = 1,
-		.pull_up_en = 0,
-		.pin_bit_mask = (1 << GPIO_TEST1)
-	};
-	
-	//Set up handshake line interrupt.
-	gpio_config(&io_conf_test1);
 
 	esp_err_t ret;
 	spi_device_handle_t handle;
 
 	//Configuration for the SPI bus
-	spi_bus_config_t buscfg = { 
+	static spi_bus_config_t buscfg = { 
         .mosi_io_num = GPIO_MOSI, 
         .miso_io_num = GPIO_MISO, 
         .sclk_io_num = GPIO_SCLK, 
@@ -270,7 +414,7 @@ static void spi_task(void *pvParameters){
     };
 
 	//Configuration for the SPI device on the other side of the bus
-	spi_device_interface_config_t devcfg = { 
+	static spi_device_interface_config_t devcfg = { 
         .command_bits = 0, 
         .address_bits = 0, 
         .dummy_bits = 0, 
@@ -304,19 +448,22 @@ static void spi_task(void *pvParameters){
 		
 		//下面的逻辑是，在WiFi返回的控制信号有效时进入I2C传输，若检测到无效就开启SPI传输
 		ulTaskNotifyTake(spi,portMAX_DELAY);  //检查前面给出的Notify信号量
-		switch(ctrlbuf[5]){
-			case '0':
+		switch(ctrlbuf[8]){
+			case '0':	//正常SPI传输
 				gpio_set_level(GPIO_TEST1,1);
-				//ret = spi_device_transmit(handle, &t);  //这里准备把每包数据设为608*10*8，也就是八行数据一包
+				ret = spi_device_transmit(handle, &t);  //这里准备把每包数据设为608*10*8，也就是八行数据一包
 				break;
-			case '1':
+			case '1':	//CMOS变焦
 				gpio_set_level(GPIO_TEST2,1);
-				//ret = i2c_MAX14547(I2C_MASTER_NUM);
-			case '2':
+				ret = i2c_MAX14547(I2C_MASTER_NUM);
+				break;
+			case '2':	//CMOS驱动LED光强控制
 				gpio_set_level(GPIO_TEST3,1);
-				//ret = i2c_TPL0102(I2C_MASTER_NUM);
-			case '3':
-				//Reserved for COMS control
+				ret = i2c_TPL0102(I2C_MASTER_NUM);
+				break;
+			case '3':	//设置CMOS的增益(GAIN)
+				set_gain_value();
+			
 		}
 		if (ret != ESP_OK) {
 			ESP_LOGW(TAG, "%s: Pripherals Error:", esp_err_to_name(ret));
@@ -325,76 +472,6 @@ static void spi_task(void *pvParameters){
 		xTaskNotify(wifisend,1,eSetValueWithOverwrite); //然后再通过通知量把value的值传出去
 
 	}
-}
-
-/**
- * initialize i2c bus
- * _______________________________________________________________________________________
- * | start | slave_addr + rd_bit + ack | register_addr + ack  | write 1 byte + ack | stop |
- * --------|---------------------------|----------------------|--------------------|------|
- * release i2c bus
- */
-static esp_err_t i2c_MAX14547(i2c_port_t i2c_num)
-{ 
-    int ret;
-	EWL_LSB = ctrlbuf[0]; 	//OIS_LSB
-	EWL_MSB = ctrlbuf[1]; 	//LLV1
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (MAX14547_WRITE_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);	//发送从机地址+写标志信号
-	i2c_master_write_byte(cmd, OSI_LSB_ADDR, ACK_CHECK_EN);	//发送寄存器地址,寄存器地址会自增
-    i2c_master_write_byte(cmd, EWL_LSB, ACK_CHECK_EN);		//发送控制信号
-	i2c_master_write_byte(cmd, EWL_MSB, ACK_CHECK_EN);		//发送控制信号
-    i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
-    i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-}
-
-/**
- * initialize i2c bus
- * _______________________________________________________________________________________
- * | start | slave_addr + rd_bit + ack | register_addr + ack  | write 1 byte + ack | stop |
- * --------|---------------------------|----------------------|--------------------|------|
- * release i2c bus
- * 
- * initialize i2c bus
- * _______________________________________________________________________________________
- * | start | slave_addr + rd_bit + ack | register_addr + ack  | write 1 byte + ack | stop |
- * --------|---------------------------|----------------------|--------------------|------|
- * release i2c bus
- */
-static esp_err_t i2c_TPL0102(i2c_port_t i2c_num)
-{ 
-    int ret;
-	ACR_CONFIG = ctrlbuf[2]; 	//ACR
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (TPL0102_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);	//发送从机地址+写标志信号
-	i2c_master_write_byte(cmd, ACR_REG, ACK_CHECK_EN);	//发送寄存器地址,寄存器地址会自增
-    i2c_master_write_byte(cmd, ACR_CONFIG, ACK_CHECK_EN);		//发送控制信号
-    i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
-    i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-	//这里不确定寄存器地址写满以后会不会从头开始，因此分别进行两次传输
-	IVRA_CONFIG = ctrlbuf[3]; 	//IVRA
-	i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (TPL0102_ADDR << 1) | WRITE_BIT, ACK_CHECK_EN);	//发送从机地址+写标志信号
-	i2c_master_write_byte(cmd, IVRA_REG, ACK_CHECK_EN);	//发送寄存器地址,寄存器地址会自增
-    i2c_master_write_byte(cmd, IVRA_CONFIG, ACK_CHECK_EN);		//发送控制信号
-    i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
-    i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
 }
 
 static esp_err_t i2c_master_init(void)
@@ -467,14 +544,18 @@ static void wifisend_task(void *pvParameters){
 				
 				len = recv(sock, ctrlbuf, strlen(ctrlbuf), 0);	//每包数据完成传输后PC发给ESP32一个应答信号，这个信号也可以携带控制信息
 
-				if(ctrlbuf == '2'){		//标志控制指令已经传来
+				//CMOS LED和STATUS LED直接控制，不占用spi_task时间
+				ent1_ctrl();
+				status_led_ctrl();
+
+				if(ctrlbuf != 0){		//标志控制指令已经传来
 					//gpio_set_level(GPIO_TEST,1);
 					printf("ctrlbuf:%s\n",ctrlbuf);
 					printf("len:%d\n",len);
 				}
 				else{	//ack信号默认为1，因此else的唯一情况就是len=1
 					//gpio_set_level(GPIO_TEST,0);
-					printf("ctrlbuf not 2:%c",ctrlbuf);
+					printf("ctrlbuf not 2:%s",ctrlbuf);
 					printf("len:%d\n",len);
 				}
 			}
@@ -483,7 +564,6 @@ static void wifisend_task(void *pvParameters){
 		vTaskDelete(NULL);
   }
 }
-
 
 void init_nvs() {
 	esp_err_t ret = nvs_flash_init();
@@ -494,10 +574,69 @@ void init_nvs() {
 	ESP_ERROR_CHECK(ret);
 }
 
+void init_PYTHON480() {
+	// Sets up initial register values in the PYTHON 480
+	EnableClockMngmnt1();
+	//Maybe a small pause here for things to stabilize
+	ets_delay_us(10000);  //delay 10ms
+	EnableClockMngmnt2();
+	RequiredUploads();
+	SoftPowerUp();
+	//EnableSeq(); //Not sure if this is good or not
+}
+
 //Main application
 void app_main(void) {
 
 	init_nvs();
+
+	//三个用于调试的信号
+	gpio_config_t io_conf_test1 = {
+		.intr_type = GPIO_INTR_DISABLE,    
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_down_en = 1,
+		.pull_up_en = 0,
+		.pin_bit_mask = (1 << GPIO_TEST1)
+	};
+	gpio_config(&io_conf_test1);
+
+	gpio_config_t io_conf_test2 = {
+		.intr_type = GPIO_INTR_DISABLE,    
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_down_en = 1,
+		.pull_up_en = 0,
+		.pin_bit_mask = (1 << GPIO_TEST2)
+	};
+	gpio_config(&io_conf_test2);
+
+	gpio_config_t io_conf_test3 = {
+		.intr_type = GPIO_INTR_DISABLE,    
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_down_en = 1,
+		.pull_up_en = 0,
+		.pin_bit_mask = (1 << GPIO_TEST3)
+	};
+	gpio_config(&io_conf_test3);
+
+	//配置CMOS LED使能信号ENT1，信号控制芯片LTC3218
+	gpio_config_t io_conf_ent1 = {
+		.intr_type = GPIO_INTR_DISABLE,    
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_down_en = 1,
+		.pull_up_en = 0,
+		.pin_bit_mask = (1 << GPIO_ENT1)
+	};
+	gpio_config(&io_conf_ent1);
+
+	//配置CMOS状态指示LED控制信号LED，信号直接控制发光二极管驱动电路
+	gpio_config_t io_conf_led = {
+		.intr_type = GPIO_INTR_DISABLE,    
+		.mode = GPIO_MODE_OUTPUT,
+		.pull_down_en = 1,
+		.pull_up_en = 0,
+		.pin_bit_mask = (1 << GPIO_STATUS_LED)
+	};
+	gpio_config(&io_conf_led);
 
 	//配置WiFi低功耗模式(Light-Sleep)
 	#if CONFIG_PM_ENABLE
