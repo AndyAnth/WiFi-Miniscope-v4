@@ -2,7 +2,7 @@ Use FPGA to control PYTHON480 CMOS
 In regard of the rigid time sequence and limits required by OYTHON480's SPI interface
 The FPGA could simulate a peripheral under any requires
 Current solution is: 
-FPGA acquire commands from ESP32 through SPI3 interface and then stored the commands in a FIFO (different with the currently existing FIFO used for buffering image data)
+FPGA acquire commands from ESP32 through SPI3 interface and then stored the commands in a FIFO (different from the currently existing FIFO used for buffering image data)
 FPGA pull commands (9bits address + indicating bit + 16bits dara) from the FIFO and send them to PYTHON480 through SPI interface
 After writing all commands to PYTHON480, FPGA return a flag bit (pull up a gpio line) to inform ESP32 that the process was finished.
 Each time ESP32 receive data from PC through WiFi, it send this data to the FPGA, which will occupy one task cycle (we should add another event in spi_task).
