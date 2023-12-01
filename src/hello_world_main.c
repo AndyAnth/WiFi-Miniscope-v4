@@ -23,9 +23,6 @@
 #include "esp_pm.h"
 #include "esp32s3/rom/ets_sys.h"
 #include "driver/i2c.h"
-#include "definitions.h"
-#include "PYTHON480.h"
-#include "SPI_BB_PYTHON480.h"
 
 #define GPIO_HANDSHAKE 2
 #define GPIO_MOSI 13
@@ -48,6 +45,9 @@
 #define GPIO_STATUS_LED 7
 #define SENDER_HOST SPI2_HOST
 #define CMOSCTRL_HOST SPI3_HOST
+
+#define DONE 1
+#define DISABLE_PLL
 
 //I2C Slave Address
 #define DATA_LENGTH 512                  /*!< Data buffer length of test buffer */
@@ -88,7 +88,7 @@ int  port = 5001;
 
 //SPI传输BUF尺寸定义
 #define SPI_BUF_SIZE 38192
-#define SPI_BB_BUF_SIZE 25  //CMOS控制信号的传输位宽
+#define SPI_BB_BUF_SIZE 4  //CMOS控制信号的传输位宽
 
 //I2C传输BUF尺寸定义
 #define I2C_BUF_SIZE 3
@@ -110,9 +110,12 @@ static EventGroupHandle_t s_wifi_event_group;
 static char sendbuf[SPI_BUF_SIZE] = {0};
 static char recvbuf[SPI_BUF_SIZE] = {0};
 
-static char cmos_sendbuf[SPI_BUF_SIZE] = {0};
-static char cmos_recvbuf[SPI_BUF_SIZE] = {0};
+//static char cmos_sendbuf[SPI_BB_BUF_SIZE] = {0};
+//static char cmos_recvbuf[SPI_BB_BUF_SIZE] = {0};
+static uint32_t cmos_sendbuf = 0;
+static uint32_t cmos_recvbuf = 0;
 
+static spi_device_handle_t handle_cmos;	//该句柄将被全局调用
 
 //ctrl signal
 static char ctrlbuf[8] = {0};	//EWL_LSB, EWL_MSB, ACR_CONFIG, IVRA_CONFIG, ENT1, GAIN_VALUE, STATUS_LED, CTRLCODE
@@ -167,9 +170,8 @@ static esp_err_t i2c_MAX14547(i2c_port_t i2c_num)
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
     i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    
+	return ret;
 }
 
 /**
@@ -197,10 +199,7 @@ static esp_err_t i2c_TPL0102(i2c_port_t i2c_num)
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
     i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
+    
 	//这里不确定寄存器地址写满以后会不会从头开始，因此分别进行两次传输
 	IVRA_CONFIG = ctrlbuf[3]; 	//IVRA
 	cmd = i2c_cmd_link_create();	//上面delete了cmd不知道这里是否需要重新建立
@@ -211,9 +210,8 @@ static esp_err_t i2c_TPL0102(i2c_port_t i2c_num)
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_PERIOD_MS);
     i2c_cmd_link_delete(cmd);
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    
+	return ret;
 }
 
 static void ent1_ctrl(void){
@@ -234,8 +232,28 @@ static void status_led_ctrl(void){
 	}
 }
 
-static void set_gain_value(void){
+/*CMOS SPI控制参数传输函数*/
+static esp_err_t spi_BB_Write(uint16_t address, uint16_t value){
+//package fomat(MSB->LSB): 6bits dummy(zero) + 9bits address + 1bit w/r + 16bits value
+	uint32_t packagedata;	//reformatted data
+	packagedata = address;	//16bits -> 32bits
+	packagedata = (((packagedata << 1) + 1) << 16) + value;	
 
+	spi_transaction_t t;
+	cmos_sendbuf = packagedata;	//push packagedata into send buffer
+	//t.length = sizeof(cmos_sendbuf) * 8; 
+	t.length = sizeof(cmos_sendbuf);
+	t.tx_buffer = &cmos_sendbuf;
+	t.rx_buffer = &cmos_recvbuf;
+
+	esp_err_t ret;
+	ret = spi_device_transmit(handle_cmos, &t);
+
+	return ret;
+}
+
+static void set_gain_value(void){
+	
 	switch(ctrlbuf[8]){
 		case '1':
 			spi_BB_Write(204, 0x00E1);
@@ -249,35 +267,238 @@ static void set_gain_value(void){
 	}
 }
 
-static void spi_BB_Write(uint16_t address, uint16_t value){
+/*CMOS初始化和驱动函数*/
+void EnableClockMngmnt1(void){
 
-	esp_err_t ret;
+	spi_BB_Write(2, 0x0000);// Monochrome sensor
+	spi_BB_Write(17, 0x2113);// Configure PLL
+	spi_BB_Write(20, 0x0000);// Configure clock management
+	spi_BB_Write(26, 0x2280);// Configure PLL lock detector
+	spi_BB_Write(27, 0x3D2D);// Configure PLL lock detector
+
+	#ifdef DISABLE_PLL 
+		spi_BB_Write(32, 0x7014|0x0008);// spi_BB_Write(32, 0x2004);PLL input clock
+	#else
+		spi_BB_Write(32, 0x7014);// spi_BB_Write(32, 0x2004);PLL input clock
+	#endif
+	spi_BB_Write(8, 0x0000);// Release PLL soft reset
+	#ifdef DISABLE_PLL 
+		spi_BB_Write(16,0x0007);// Disable PLL
+	#else
+		spi_BB_Write(16, 0x0003);// Enable PLL Andres says to make this 0x0007. I originally had it at 0x0004. Try 0x0003
+	#endif
+}
+
+void EnableClockMngmnt2(void) {// Enable internal clock distribution
+
+	spi_BB_Write(9, 0x0000);// Release clock generator Soft Reset
+
+	//Why is it 0x7006 instead of 0x2006??
+	#ifdef DISABLE_PLL
+		spi_BB_Write(32, 0x7006|0x0008);// spi_BB_Write(32, 0x7006); Enable logic clock. Changed this to 7006 to try
+	#else
+		spi_BB_Write(32, 0x7006);// spi_BB_Write(32, 0x7006); Enable logic clock. Changed this to 7006 to try
+	#endif
+
+	spi_BB_Write(34, 0x0001);// Enable logic blocks
+}
+
+void RequiredUploads(void) {// Reserved register settings uploads
+
+	spi_BB_Write(2, 0x0000);
+	spi_BB_Write(8, 0x0000);
+	spi_BB_Write(9, 0x0000);
+	spi_BB_Write(10, 0x0000);
+	spi_BB_Write(20, 0x0000);
+	//spi_BB_Write(24, 0x0001);
+	spi_BB_Write(26, 0x2280);
+	spi_BB_Write(27, 0x3D2D);
+	#ifdef DISABLE_PLL
+		spi_BB_Write(32, 0x7007|0x0008);
+	#else
+		spi_BB_Write(32, 0x7007);
+	#endif
+	spi_BB_Write(34, 0x0001);
+	spi_BB_Write(40, 0x0007); // 3rd bit endables bias. This was set to 0 (0x003).
+	spi_BB_Write(41, 0x085F);
+	spi_BB_Write(42, 0x4103);
+	spi_BB_Write(43, 0x0518);
+	spi_BB_Write(48, 0x0001);
+	spi_BB_Write(64, 0x0001);
+	spi_BB_Write(65, 0x382A); //Bias block. spi_BB_Write(65, 0x382B)
+	spi_BB_Write(66, 0x53C8);
+	spi_BB_Write(67, 0x0665);
+	spi_BB_Write(68, 0x0085);
+	spi_BB_Write(69, 0x0888);
+	spi_BB_Write(70, 0x4800);
+	spi_BB_Write(71, 0x8888);
+	spi_BB_Write(72, 0x0117);
+	//spi_BB_Write(112, 0x0007);
+	spi_BB_Write(112, 0x0000); // LVDS powerdown config
+	spi_BB_Write(128, 0x470A); //spi_BB_Write(128, 0x470A); spi_BB_Write(128, 0x4714); black offset
+	spi_BB_Write(129, 0x8001);
+	//spi_BB_Write(130, 0x0001); // Handles phase of pixel clock changed from 0x0001 to 0x0015
+
+	// Test Pattern
+	//spi_BB_Write(144,0x0003);
+
+	spi_BB_Write(130, 0x0015);
+	spi_BB_Write(192, 0x0801); // Monitor select function
+	spi_BB_Write(194, 0x00E4);	// reverse x and y enabled for demo kit compatibility
+	spi_BB_Write(197, 0x0104); // 0x0380) Num black lines spi_BB_Write(197, 0x030A);
+	#ifdef DISABLE_PLL 
+		spi_BB_Write(199, 167); // Exposure/Frame rate config, spi_BB_Write(199, 0x0299);
+		spi_BB_Write(200, 3300); // Frame length, spi_BB_Write(200, 0x0350);
+		spi_BB_Write(201, 3300); // spi_BB_Write(201, 2900); // Exposure time spi_BB_Write(201, 0x01F4);
+	#else
+		spi_BB_Write(199, 666); // Exposure/Frame rate config, spi_BB_Write(199, 0x0299);
+		spi_BB_Write(200, 3000); // Frame length, spi_BB_Write(200, 0x0350);
+		spi_BB_Write(201, 2900); // spi_BB_Write(201, 2900); // Exposure time spi_BB_Write(201, 0x01F4);
+	#endif
+	spi_BB_Write(204, 0x00E4); 	// (gain 1x : 0x00E1 // gain 2x : 0x00E4 // gain 3.5x : 0x0024)
+	spi_BB_Write(207, 0x0014);
+	spi_BB_Write(214, 0x0100);
+	spi_BB_Write(215, 0x101F);
+	spi_BB_Write(216, 0x0000);
+	spi_BB_Write(219, 0x0023);
+	spi_BB_Write(220, 0x3C2B);
+	spi_BB_Write(221, 0x2B4D);
+	spi_BB_Write(224, 0x3E5E);
+	spi_BB_Write(211, 0x0049);
+	spi_BB_Write(216, 0x0000);
+	spi_BB_Write(219, 0x0023);
+	spi_BB_Write(220, 0x3C2B);
+	spi_BB_Write(221, 0x2B4D);
+	spi_BB_Write(230, 0x0299);
+	spi_BB_Write(231, 0x0350);
+	spi_BB_Write(232, 0x01F4);
+	spi_BB_Write(235, 0x00E1);
+
+	// Set ROI Size
+	spi_BB_Write(256, 0xB019); // Horizontal pixel range times 4 plus 4 for ROI0
+	spi_BB_Write(258, 0xB019); // Horizontal pixel range times 4 plus 4 for ROI1
+
+	//////////////////////////////////////////
+	////// PROGRAM SPACE //////
+	//////////////////////////////////////////
+	spi_BB_Write(384, 0xC800);
+	spi_BB_Write(385, 0xFB1F);
+	spi_BB_Write(386, 0xFB1F);
+	spi_BB_Write(387, 0xFB12);
+	spi_BB_Write(388, 0xF912);
+	spi_BB_Write(389, 0xF903);
+	spi_BB_Write(390, 0xF802);
+	spi_BB_Write(391, 0xF30F);
+	spi_BB_Write(392, 0xF30F);
+	spi_BB_Write(393, 0xF30F);
+	spi_BB_Write(394, 0xF30A);
+	spi_BB_Write(395, 0xF101);
+	spi_BB_Write(396, 0xF00A);
+	spi_BB_Write(397, 0xF24B);
+	spi_BB_Write(398, 0xF201);
+	spi_BB_Write(399, 0xF226);
+	spi_BB_Write(400, 0xF021);
+	spi_BB_Write(401, 0xF001);
+	spi_BB_Write(402, 0xF402);
+	spi_BB_Write(403, 0xF007);
+	spi_BB_Write(404, 0xF20F);
+	spi_BB_Write(405, 0xF20F);
+	spi_BB_Write(406, 0xF202);
+	spi_BB_Write(407, 0xF006);
+	spi_BB_Write(408, 0xEC08);
+	spi_BB_Write(409, 0xC801);
+	spi_BB_Write(410, 0xC800);
+
+	spi_BB_Write(419, 0xC800);
+	spi_BB_Write(420, 0xCC02);
+	spi_BB_Write(421, 0xCC01);
+	spi_BB_Write(422, 0xCC02);
+	spi_BB_Write(423, 0xCC01);
+	spi_BB_Write(424, 0xCC02);
+	spi_BB_Write(425, 0xC805);
+	spi_BB_Write(426, 0xC800);
+
+	spi_BB_Write(427, 0x0030);
+	spi_BB_Write(428, 0x207B);
+	spi_BB_Write(429, 0x2071);
+	spi_BB_Write(430, 0x0071);
+	spi_BB_Write(431, 0x107F);
+	spi_BB_Write(432, 0x1072);
+	spi_BB_Write(433, 0x1074);
+	spi_BB_Write(434, 0x0071);
+	spi_BB_Write(435, 0x0031);
+	spi_BB_Write(436, 0x21BB);
+	spi_BB_Write(437, 0x20B1);
+	spi_BB_Write(438, 0x00B1);
+	spi_BB_Write(439, 0x10BF);
+	spi_BB_Write(440, 0x10B2);
+	spi_BB_Write(441, 0x10B4);
+	spi_BB_Write(442, 0x00B1);
+	spi_BB_Write(443, 0x0030);
+
+	spi_BB_Write(444, 0x0030);
+	spi_BB_Write(445, 0x217B);
+	spi_BB_Write(446, 0x2071);
+	spi_BB_Write(447, 0x0071);
+	spi_BB_Write(448, 0x107F);
+	spi_BB_Write(449, 0x1072);
+	spi_BB_Write(450, 0x1074);
+	spi_BB_Write(451, 0x0071);
+	spi_BB_Write(452, 0x0031);
+	spi_BB_Write(453, 0x21BB);
+	spi_BB_Write(454, 0x20B1);
+	spi_BB_Write(455, 0x00B1);
+	spi_BB_Write(456, 0x10BF);
+	spi_BB_Write(457, 0x10B2);
+	spi_BB_Write(458, 0x10B4);
+	spi_BB_Write(459, 0x00B1);
+	spi_BB_Write(460, 0x0030);
+
+	spi_BB_Write(461, 0x0030);
+	spi_BB_Write(462, 0x217B);
+	spi_BB_Write(463, 0x2071);
+	spi_BB_Write(464, 0x0071);
+	spi_BB_Write(465, 0x1071);
+	spi_BB_Write(466, 0x0071);
+	spi_BB_Write(467, 0x0031);
+	spi_BB_Write(468, 0x21BB);
+	spi_BB_Write(469, 0x20B1);
+	spi_BB_Write(470, 0x00B1);
+	spi_BB_Write(471, 0x10B3);
+	spi_BB_Write(472, 0x10B1);
+	spi_BB_Write(473, 0x00B1);
+	spi_BB_Write(474, 0x003F);
+	spi_BB_Write(475, 0x0032);
+	spi_BB_Write(476, 0x0030);
+}
+
+void SoftPowerUp(void) {
 	
-	spi_device_handle_t handle;
+	spi_BB_Write(10, 0x0000);	// Release soft reset state
+	#ifdef DISABLE_PLL 
+		spi_BB_Write(32, 0x7007|0x0008);	// Enable analog clock
+	#else
+		spi_BB_Write(32, 0x7007);	// Enable analog clock
+	#endif
+	spi_BB_Write(40, 0x0007);	// Enable column multiplexer // 3rd bit endables bias. This was set to 0 (0x003).
+	spi_BB_Write(42, 0x4113);	// spi_BB_Write(42, 0x4103); Configure image core
+	spi_BB_Write(48, 0x0001);	// Enable AFE
+	spi_BB_Write(64, 0x0001);	// Enable biasing block
+	spi_BB_Write(72, 0x0127);	// spi_BB_Write(72, 0x0117); Enable charge pump. 
+	//spi_BB_Write(112, 0x0007);	// Enable LVDS transmitters
+	spi_BB_Write(112, 0x0000);	// Enable LVDS transmitters
+}
 
-	spi_transaction_t t;
+void init_PYTHON480(void) {
+	// Sets up initial register values in the PYTHON 480
+	EnableClockMngmnt1();
+	//Maybe a small pause here for things to stabilize
+	ets_delay_us(10000);	//Delay 10ms
+	EnableClockMngmnt2();
+	RequiredUploads();
+	SoftPowerUp();
 
-	//Initialize the SPI bus and add the device we want to send stuff to.
-	ret = spi_bus_initialize(CMOSCTRL_HOST, &buscfg, SPI_DMA_CH_AUTO);
-	assert(ret==ESP_OK);
-	ret = spi_bus_add_device(CMOSCTRL_HOST, &devcfg, &handle);
-	assert(ret==ESP_OK);
-
-	while(1){
-
-		t.length = sizeof(cmos_sendbuf) * 8;  //可能是在这里控制传输总数据量来控制传输起止
-		t.tx_buffer = cmos_sendbuf; 
-		t.rx_buffer = cmos_recvbuf;
-		
-		//下面的逻辑是，在WiFi返回的控制信号有效时进入I2C传输，若检测到无效就开启SPI传输
-		ulTaskNotifyTake(spi,portMAX_DELAY);  //检查前面给出的Notify信号量
-		switch(ctrlbuf[8]){
-			case '0':	//正常SPI传输
-				gpio_set_level(GPIO_TEST1,1);
-				ret = spi_device_transmit(handle, &t);  //这里准备把每包数据设为608*10*8，也就是八行数据一包
-				break;
-		}
-	}
+	//EnableSeq(); //Not sure if this is good or not
 }
 
 static void event_handler(void *arg, esp_event_base_t event_base,int32_t event_id, void *event_data) {
@@ -404,7 +625,7 @@ static void spi_task(void *pvParameters){
 	spi_device_handle_t handle;
 
 	//Configuration for the SPI bus
-	static spi_bus_config_t buscfg = { 
+	spi_bus_config_t buscfg = { 
         .mosi_io_num = GPIO_MOSI, 
         .miso_io_num = GPIO_MISO, 
         .sclk_io_num = GPIO_SCLK, 
@@ -414,11 +635,11 @@ static void spi_task(void *pvParameters){
     };
 
 	//Configuration for the SPI device on the other side of the bus
-	static spi_device_interface_config_t devcfg = { 
+	spi_device_interface_config_t devcfg = { 
         .command_bits = 0, 
         .address_bits = 0, 
         .dummy_bits = 0, 
-        .clock_speed_hz = 40000000, //30MHz时钟频率
+        .clock_speed_hz = 40000000, //40MHz时钟频率
 		.input_delay_ns = 0,
         .duty_cycle_pos = 128,        //50% duty cycle
 		.mode = 1, 
@@ -438,11 +659,19 @@ static void spi_task(void *pvParameters){
 	ret = spi_bus_add_device(SENDER_HOST, &devcfg, &handle);
 	assert(ret==ESP_OK);
 
+	//注册发送CMOS控制指令的SPI 通道
+	static esp_err_t ret_cmos;
+	//Initialize the SPI bus and add the device we want to send stuff to.
+	ret_cmos = spi_bus_initialize(CMOSCTRL_HOST, &buscfg, SPI_DMA_CH_AUTO);
+	assert(ret_cmos==ESP_OK);
+	ret_cmos = spi_bus_add_device(CMOSCTRL_HOST, &devcfg, &handle_cmos);	//注意这里的时钟频率还是40MHz
+	assert(ret_cmos==ESP_OK);
+
 	while(1){
 
 		//gpio_set_level(GPIO_TEST1,1);
-
-		t.length = sizeof(sendbuf) * 8;  //可能是在这里控制传输总数据量来控制传输起止
+		
+		t.length = sizeof(sendbuf) * 8;  //设置传输数据总量，*8是因为sizeof(sendbuf)得到的是SPI_BB_BUF_SIZE，而char型变量有8bits
 		t.tx_buffer = sendbuf; 
 		t.rx_buffer = recvbuf;
 		
@@ -574,17 +803,6 @@ void init_nvs() {
 	ESP_ERROR_CHECK(ret);
 }
 
-void init_PYTHON480() {
-	// Sets up initial register values in the PYTHON 480
-	EnableClockMngmnt1();
-	//Maybe a small pause here for things to stabilize
-	ets_delay_us(10000);  //delay 10ms
-	EnableClockMngmnt2();
-	RequiredUploads();
-	SoftPowerUp();
-	//EnableSeq(); //Not sure if this is good or not
-}
-
 //Main application
 void app_main(void) {
 
@@ -638,6 +856,9 @@ void app_main(void) {
 	};
 	gpio_config(&io_conf_led);
 
+	i2c_master_init();
+	init_PYTHON480(); 		//初始化PYTHON480参数
+
 	//配置WiFi低功耗模式(Light-Sleep)
 	#if CONFIG_PM_ENABLE
     	// Configure dynamic frequency scaling:
@@ -657,6 +878,5 @@ void app_main(void) {
 
 	xTaskCreatePinnedToCore(wifisend_task, "wifisend_task", 81920, NULL, 1, &wifisend,1);
 	//解决assert failed: xQueueGiveFromISR queue.c:1224 (pxQueue)问题的方法是修改任务句柄&gpio_set和任务优先级
-
-
+	
 }
