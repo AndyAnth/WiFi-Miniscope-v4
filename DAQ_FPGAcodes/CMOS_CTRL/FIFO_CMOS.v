@@ -1,7 +1,7 @@
 module FIFO_CMOS#(
-      parameter   data_width = 27,
-      parameter   data_depth = 600,
-      parameter   addr_width = 12
+      parameter   data_width = 32,
+      parameter   data_depth = 20,
+      parameter   addr_width = 5
 )
 (
       input                           rst_n,
