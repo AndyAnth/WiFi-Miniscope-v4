@@ -2,9 +2,9 @@
 
 module  tb_ring_fifo#(
     parameter   data_width = 8,
-    parameter   data_depth = 30,
+    parameter   data_depth = 60,
     parameter   addr_width = 13,
-    parameter   package_size = 10 
+    parameter   package_size = 60 
 );
 
 reg            sys_clk      ;   
@@ -16,23 +16,26 @@ reg                   rd_en  ;
 
 wire                   valid  ;
 wire [data_width-1:0]  dout   ;
-wire                    package_ready; 
+wire                   package_ready; 
 wire                   empty  ;
-wire                    empty1 ;
+wire                   empty1 ;
 wire                   full1  ;
 wire                   empty2 ;
 wire                   full2  ;
-wire                    wr_en1 ;
-wire                    wr_en2 ;
-wire                    rd_en1 ;
-wire                    rd_en2 ;
+wire                   ram_wr_sel ;
+wire                   ram1_rd_sel;
+wire                   ram2_rd_sel;
+wire                   wr_en1 ;
+wire                   wr_en2 ;
+wire                   rd_en1 ;
+wire                   rd_en2 ;
 wire                   rd_out ;
-wire                    rd_sel ;
-wire [data_width-1:0]  dout1;
-wire [data_width-1:0]  dout2;
+wire                   rd_sel ;
+wire [data_width-1:0]  dout1  ;
+wire [data_width-1:0]  dout2  ;
 wire                   valid1 ;
 wire                   valid2 ;
-wire                    emp_sel;  
+wire                   emp_sel;  
 
 
 wire            data_in0    ;
@@ -47,9 +50,9 @@ wire            clk_out     ;
 wire            frame_vaild ;  
 wire            line_vaild  ;  
 wire    [2:0]   state       ;
-wire    [7:0]   data_in    ;
-wire            daq_clk    ;
-wire    [9:0]   rec_cnt    ;
+wire    [7:0]   data_in     ;
+wire            daq_clk     ;
+wire    [9:0]   rec_cnt     ;
 
 wire [addr_width-1:0]   wr_addr1;
 wire [addr_width-1:0]   rd_addr1;
@@ -62,20 +65,30 @@ initial
         sys_clk    = 0;
         sys_rst_n  = 0;
         wr_en = 0;
-        rd_en = 0;
         rd_clk = 0;
+        rd_en = 0;
 
         #50 sys_rst_n  = 1;
 
         #50 wr_en = 1;
-        
-        #100 rd_en = 1;
-        
-      
-    end
+        rd_en = 1;
 
+    end
+/*
+always@(posedge sys_clk or negedge sys_rst_n)
+    if(!sys_rst_n)
+        rd_en <= 1'b0;
+    else if(package_ready)
+        rd_en <= 1'b1;
+    else if(empty1)
+        rd_en <= 1'b0;
+    else if(empty2)
+        rd_en <= 1'b0;
+    else
+        rd_en <= rd_en;
+*/
 always  #10 sys_clk  <=  ~sys_clk;
-always  #20 rd_clk   <=  ~rd_clk;
+always  #5 rd_clk   <=  ~rd_clk;
 
 
 DATA_GEN#(
@@ -164,7 +177,10 @@ ring_fifo#(
     .wr_addr1       (wr_addr1),
     .rd_addr1       (rd_addr1),
     .wr_addr2       (wr_addr2),
-    .rd_addr2       (rd_addr2)
+    .rd_addr2       (rd_addr2),
+    .ram_wr_sel     (ram_wr_sel),
+    .ram1_rd_sel    (ram1_rd_sel),
+    .ram2_rd_sel    (ram2_rd_sel)
 );
 
 endmodule

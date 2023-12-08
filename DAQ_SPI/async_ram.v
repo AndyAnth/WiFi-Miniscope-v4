@@ -52,31 +52,56 @@ always@(posedge rd_clk or negedge rst_n)
    begin
         if(!rst_n)
             rd_addr <= 1'b0;
-        else if(rd_en && (~rd_out))
+        else if((rd_en) && (~rd_out))
             rd_addr <= rd_addr + 1;
-        else if(rd_out)
+        else if((rd_out) && (~rd_en)) //这个是防止在另一个FIFO写入的时候，当前FIFO读空后会重置rd_addr而从头开始读取
             rd_addr <= 1'b0;    //当读完后把读指针归零准备从头读
-        else 
+        else
             rd_addr <= rd_addr;
    end
 
+reg     valid_pre;
 always@(posedge rd_clk or negedge rst_n)
    begin
-      if(!rst_n)
-         valid <= 1'b0;
-      else if(rd_en && (~rd_out))
-         valid <= 1'b1;
-      else 
-         valid <= 1'b0;
+        if(!rst_n)
+            valid_pre <= 1'b0;
+        else if(rd_en && (~rd_out))
+            valid_pre <= 1'b1;
+        else 
+            valid_pre <= 1'b0;
+   end
+
+//把valid信号打一拍来配合dout的时序(dout从RAM中读出要滞后rd_addr一个时钟周期)
+always@(posedge rd_clk or negedge rst_n)
+   begin
+        if(!rst_n)
+            valid <= 1'b0;
+        else 
+            valid <= valid_pre;
+   end
+
+//接收数据计数器，计数一共收到多少数据
+reg  wr_cnt;
+always@(posedge wr_clk or negedge rst_n)
+   begin
+        if(!rst_n)
+            wr_cnt <= 1'b0;
+        else if(wr_en && (~full))
+            wr_cnt <= wr_cnt + 1'b1;
+        else if(rd_out)
+            wr_cnt <= 1'b0;
+        else
+            wr_cnt <= wr_cnt;
    end
 
 //这里就把FIFO的总长度改变了，不用受限于RAM容量
-assign full = (wr_addr == data_depth) ? 1 : 0;
+assign full = (wr_addr == data_depth) ? 1 : 0;  
+//FULL信号波形上早于(wr_addr==data_depth)一个wr_clk周期，正好配合wr_en的变化
 
 //标志已经把FIFO中的数据都读空了
 assign rd_out  = (rd_addr == data_depth) ? 1 : 0;
 
-//写指针为0表示FIFO是空的
-assign empty = (wr_addr == 1'b0) ? 1 : 0;
+//写指针为0表示FIFO是空的(但现在的逻辑是标志读空)
+assign empty = (~valid) ? 1 : 0;
 
 endmodule

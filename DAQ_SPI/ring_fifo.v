@@ -1,8 +1,8 @@
 module ring_fifo#(
     parameter   data_width = 8,
-    parameter   data_depth = 30,
+    parameter   data_depth = 60,
     parameter   addr_width = 14,
-    parameter   package_size = 10  //正常应该是38912
+    parameter   package_size = 60  //正常应该是38912
 )
 (
     input   wire                    rst_n  ,
@@ -20,10 +20,10 @@ module ring_fifo#(
     output   wire                   full1  ,
     output   wire                   empty2 ,
     output   wire                   full2  ,
-    output   reg                    wr_en1 ,
-    output   reg                    wr_en2 ,
-    output   reg                    rd_en1 ,
-    output   reg                    rd_en2 ,
+    output   wire                   wr_en1 ,
+    output   wire                   wr_en2 ,
+    output   wire                   rd_en1 ,
+    output   wire                   rd_en2 ,
     output   wire                   rd_out ,
     output   reg                    rd_sel ,
     output   wire [data_width-1:0]  dout1  ,
@@ -31,10 +31,13 @@ module ring_fifo#(
     output   wire                   valid1 ,
     output   wire                   valid2 ,
     output   reg                    emp_sel,
-    output   wire [addr_width-1:0]   wr_addr1,
-    output   wire [addr_width-1:0]   rd_addr1,
-    output   wire [addr_width-1:0]   wr_addr2,
-    output   wire [addr_width-1:0]   rd_addr2
+    output   wire [addr_width-1:0]  wr_addr1,
+    output   wire [addr_width-1:0]  rd_addr1,
+    output   wire [addr_width-1:0]  wr_addr2,
+    output   wire [addr_width-1:0]  rd_addr2,
+    output   reg                    ram_wr_sel,
+    output   reg                    ram1_rd_sel,
+    output   reg                    ram2_rd_sel
 );
 
 //两个FIFO间选择的使能信号
@@ -62,48 +65,63 @@ always @(posedge wr_clk or negedge rst_n) begin
         rd_en_posedge <= 1'b0;
 end
 
+/*------------检测wr_en信号边沿------------*/
+reg     wr_en_pre;
+reg     wr_en_posedge;
+always @(posedge wr_clk or negedge rst_n) begin
+    if(rst_n == 1'b0)
+        wr_en_pre <= 1'b0;
+    else
+        wr_en_pre <= rd_en;
+end
+
+always @(posedge wr_clk or negedge rst_n) begin
+    if(rst_n == 1'b0)
+        wr_en_posedge <= 1'b0;
+    else if((wr_en_pre == 1'b0) && (wr_en == 1'b1))  //检测上升沿
+        wr_en_posedge <= 1'b1;
+    else
+        wr_en_posedge <= 1'b0;
+end
+
 /*------------实现两组FIFO交替写入------------*/
 /*在写时钟wr_clk下交替写入两个FIFO*/
+//两个RAM的选择信号(写满了一个就写另一个，读这个)
 always@(posedge wr_clk or negedge rst_n)    
-    if(!rst_n) begin         //初始化
-        wr_en1 <= 1'b0;
-        wr_en2 <= 1'b0;
-    end
-    else if(rd_en_posedge == 1'b1) begin    //rd_en信号到来后时启动FIFO1写入，禁用FIFO2
-        wr_en1 <= 1'b1;
-        wr_en2 <= 1'b0;
-    end
-    else if(full1 == 1'b1) begin   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
-        wr_en1 <= 1'b0;
-        wr_en2 <= 1'b1;
-    end       
-    else if(full2 == 1'b1) begin   //FIFO2写满后使能FIFO1写入，FIFO2开始读出
-        wr_en1 <= 1'b1;
-        wr_en2 <= 1'b0;
-    end
-    else begin   //在数据写入和读取过程中保持使能信号
-        wr_en1 <= wr_en1;
-        wr_en2 <= wr_en2;
-    end
+    if(!rst_n)          //初始化
+        ram_wr_sel <= 1'b0;
+    else if(full1)   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
+        ram_wr_sel <= 1'b1;    
+    else if(full2)   //FIFO2写满后使能FIFO1写入，FIFO2开始读出
+        ram_wr_sel <= 1'b0;
+    else 
+        ram_wr_sel <= ram_wr_sel;
+
+assign wr_en1 = (~ram_wr_sel) && (wr_en);
+assign wr_en2 = (ram_wr_sel) && (wr_en);
 
 /*在读时钟rd_clk下交替读取两个FIFO*/
+//由于读时钟频率远远高于写时钟，因此一个FIFO满了以后会立即被读取，而不会出现跳过一段数据的情况
 always@(posedge rd_clk or negedge rst_n)    
-    if(!rst_n) begin         //初始化时两个FIFO中都没有数据，因此全都读失能
-        rd_en1 <= 1'b0;
-        rd_en2 <= 1'b0;
+    if(!rst_n) begin          //初始化
+        ram1_rd_sel <= 1'b0;
+        ram2_rd_sel <= 1'b0;
     end
-    else if(full1 == 1'b1) begin   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
-        rd_en1 <= 1'b1;
-        rd_en2 <= 1'b0;
-    end       
-    else if(full2 == 1'b1) begin   //FIFO2写满后使能FIFO1写入，FIFO2开始读出
-        rd_en1 <= 1'b0;
-        rd_en2 <= 1'b1;
+    else if(full1 && rd_en) begin   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
+        ram1_rd_sel <= 1'b1; 
+        ram2_rd_sel <= 1'b0; 
+    end   
+    else if(full2 && rd_en) begin  //FIFO2写满后使能FIFO1写入，FIFO2开始读出
+        ram1_rd_sel <= 1'b0;
+        ram2_rd_sel <= 1'b1;
     end
-    else begin      //在数据写入和读取过程中保持使能信号
-        rd_en1 <= rd_en1;
-        rd_en2 <= rd_en2;
+    else begin
+        ram1_rd_sel <= ram1_rd_sel;
+        ram2_rd_sel <= ram2_rd_sel;
     end
+
+assign rd_en1 = (ram1_rd_sel) && (rd_en);
+assign rd_en2 = (ram2_rd_sel) && (rd_en);
 
 /*指示输出信号dout和valid由哪个FIFO传来*/
 always@(posedge rd_clk or negedge rst_n)    
@@ -117,7 +135,7 @@ always@(posedge rd_clk or negedge rst_n)
         rd_sel <= rd_sel;
 
 /*配置输出信号empty*/
-always@(posedge wr_clk or negedge rst_n)    
+always@(posedge rd_clk or negedge rst_n)    
     if(!rst_n)       //初始化
         emp_sel <= 1'b0;
     else if(full1 == 1'b1)   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
@@ -129,7 +147,6 @@ always@(posedge wr_clk or negedge rst_n)
 
 wire   rd_out1 ;
 wire   rd_out2 ;
-
 
 assign dout = (rd_sel) ? dout2 : dout1;
 assign valid = (rd_sel) ? valid2 : valid1;
@@ -164,9 +181,9 @@ async_ram#(
     .dout         (  dout1    ),
     .empty        (  empty1   ),
     .full         (  full1    ),
-    .wr_addr     (wr_addr1),
-    .rd_addr     (rd_addr1),
-    .rd_out      (rd_out1) 
+    .wr_addr      ( wr_addr1  ),
+    .rd_addr      ( rd_addr1  ),
+    .rd_out       ( rd_out1   ) 
 );
 
 
@@ -188,9 +205,9 @@ async_ram#(
     .dout         (  dout2    ),
     .empty        (  empty2   ),
     .full         (  full2    ),
-    .wr_addr     (wr_addr2),
-    .rd_addr     (rd_addr2),
-    .rd_out      (rd_out1)   
+    .wr_addr      ( wr_addr2  ),
+    .rd_addr      ( rd_addr2  ),
+    .rd_out       ( rd_out2   )   
 );
 
 endmodule
