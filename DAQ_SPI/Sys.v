@@ -2,9 +2,10 @@
 
 module  Sys#(
     parameter   data_width = 8,
-    parameter   data_depth = 16384,
+    parameter   data_depth = 300,
     parameter   addr_width = 14,
-    parameter   package_size = 10
+    parameter   package_size = 300 ,
+    parameter   multiline_num = 8
 )
 (
     input   wire            sys_clk     ,   //系统时钟，频率50MHz
@@ -32,19 +33,18 @@ module  Sys#(
     input   wire            cs_n        ,   //片选信号
     input   wire            sck         ,   //串行时钟
     output  wire            miso        ,   //主输出从输入数据
-    output  wire    [2:0]   cnt_bit     ,    //比特计数器
+    output  wire    [2:0]   cnt_bit     ,   //比特计数器
     output  reg     [2:0]   state       ,
     output  wire            daq_clk     ,
     output  reg     [2:0]   sck_cnt     ,
-    output  wire            start_trans ,
     output  wire            valid       ,
     output  reg             rd_clk      ,
     output  wire            package_ready,
     output  wire            clk_out     ,
-    output  reg             pre_delay_flag,
-    output  reg             pos_delay_flag,
+    output  wire            wr_en       ,
+    output  wire            rd_en       ,
 
-    output   reg            intr_out    
+    output  wire            intr_out    
 
 );
 
@@ -52,27 +52,6 @@ module  Sys#(
 parameter   FOT           =   3'b001 ,   //帧空闲状态
             WR_EN         =   3'b010 ,   //行使能状态
             ROT           =   3'b100 ;   //行空闲状态
-
-reg     [7:0]  pre_delay_cnt    ;  //用来产生延时
-//reg            pre_delay_flag   ;
-reg     [7:0]  pos_delay_cnt    ;
-//reg            pos_delay_flag   ;
-reg     [7:0]  delay_cnt        ;
-reg            delay_flag       ;
-//wire           package_ready   ;  //FIFO传来的标志数据包准备好的信号
-reg            finish_trans     ;    //传给FIFO的标志一包数据传输结束的信号
-reg            start_intr       ;
-reg     [9:0]  package_cnt      ;
-reg     [9:0]  finish_cnt       ;
-reg            cs_pos_edge      ;
-reg            cs_pre_edge      ;
-reg            cs_n_posedge     ;
-reg            cs_n_negedge     ;
-wire           cs_p             ;
-reg            pos_delay_start  ;
-reg            pos_start_intr   ;
-reg            start_intr_posedge;
-reg            first_pre_delay_start;
 
 wire            data_in0    ;
 wire            data_in1    ;
@@ -86,12 +65,10 @@ wire            data_in7    ;
 wire            frame_vaild ;
 wire            line_vaild  ;
 
-//assign multi_line_flag = state_flag | cs_multi_line_intr;
-
 DATA_GEN#(
-    .CNT20_MAX  (4   ),
-    .CNT10_MAX  (9   ),
-    .CNT5_MAX   (19  ),
+    .CNT20_MAX  ( 4  ),
+    .CNT10_MAX  ( 9  ),
+    .CNT5_MAX   ( 19 ),
     .LINE_MAX   (100 ),
     .FRAME_MAX  (2000)
 ) DATA_GEN_inst
@@ -133,8 +110,7 @@ DAQ_sync DAQ_sync_inst
 
 
     .data_in     (data_in    ),
-    .daq_clk     (daq_clk    ),
-    .rec_cnt     (rec_cnt    )
+    .daq_clk     (daq_clk    )
 );
 
 SPI_transfer SPI_transfer_inst
@@ -145,36 +121,29 @@ SPI_transfer SPI_transfer_inst
     .valid       (valid      ),
     .cs_n        (cs_n       ),
     .miso        (miso       ),   //主输出从输入数据
-    .cnt_bit     (cnt_bit    ),   //比特计数器
-    .sent_cnt    (sent_cnt   )
+    .cnt_bit     (cnt_bit    )    //比特计数器
 
 );
-//reg delaied_rd_clk;
-//这个fifo现有的问题是启动会延迟一段时间，且会丢失起始数据
-fifo_async#(
-    .data_width (data_width),
-    .data_depth (data_depth),
-    .addr_width (addr_width),
-    .package_size (package_size)
-)fifo_async_inst
-(
-    .rst_n      (sys_rst_n ),
-    .wr_clk     (daq_clk   ),
-    .wr_en      (line_vaild),
-    .din        (data_in   ),         
-    .rd_clk     (rd_clk    ),
-    .rd_en      (start_trans),  //start_trans信号应该是ESP32传来的CS信号取反
-    .valid      (valid     ),
-    .dout       (data_out  ),
-    .empty      (rd_empty  ),
-    .full       (wr_full   ),
-    .package_ready(package_ready),
-    .wr_addr    (wr_addr   ),
-    .rd_addr    (rd_addr   )
-    );
 
-assign start_trans = ~ cs_n;    //开始传输信号是CS信号取反
-assign cs_p = ~ cs_n;   
+ring_fifo#(
+    .data_width    ( data_width  ),   //数据宽度
+    .data_depth    ( data_depth  ),   //FIFO深度
+    .addr_width    ( addr_width  ),   //地址宽度
+    .package_size  (package_size )    //总包长，正常应该是38912
+)ring_fifo_inst
+(
+    .rst_n         (  sys_rst_n  ),       //异步复位
+    .wr_clk        (   daq_clk   ),       //数据写时钟
+    .wr_en         (    wr_en    ),       //输入使能
+    .din           (   data_in   ),       //输入数据
+    .rd_clk        (    rd_clk   ),       //数据读时钟
+    .rd_en         (    rd_en    ),       //输出使能
+    
+    .valid         (    valid    ),       //数据有效标志(在FIFO中数据发完后会重复发送最后一个bit，这时只需要加valid判断即可)
+    .dout          (   data_out  ),       //输出数据
+    .package_ready (package_ready),       //FIFO中存入一包数据标志
+    .rd_out        (    rd_out   )        //读空标志信号
+);
 
 //state:两段式状态机
 always@(posedge sys_clk or negedge sys_rst_n) begin
@@ -225,195 +194,15 @@ always@(posedge sck or negedge sys_rst_n)  //在sck上升沿产生rd_clk
     else
         rd_clk <= 1'b0;
 
-//reg     start_intr;     //这个信号是自己配的，目的是启动SPI传输（这并不会控制DAQ模块的工作，但也会影响FIFO的读取）
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        start_intr <= 1'b0;
-    else if(rd_empty != 1'b1)
-        start_intr <= 1'b1;         //CS信号应该是在start_intr和延时100个clk的周期之后
-    else 
-        start_intr <= start_intr;   
-    //当DAQ模块开始采集数据后开始中断使能信号输出，因为ESP32端还需要40~60us的时间来初始化SPI总线，因此这个时长不会影响正常传输逻辑
-end
+//产生写使能信号wr_en
+assign wr_en = line_vaild;
 
-/*配置中断使能信号（没有行检测机制）*/
-/*----------------------------------CS信号边沿检测---------------------------------------*/  
-//这个边沿检测现存的问题是在系统初始化后会立即产生一个边沿检测脉冲，因此换成检测cs取反后的信号了
-//cs信号打拍得到cs_pos_edge
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        cs_pos_edge <= 1'b0;
-    else
-        cs_pos_edge <= cs_p;
-end
+//对package_ready进行三个daq_clk的延迟得到ESP32中断触发信号intr_out
+wire   intr_out_pre;
+assign intr_out_pre = package_ready;
 
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        cs_pre_edge <= 1'b0;
-    else
-        cs_pre_edge <= cs_n;
-end
+delayn#(.n(3)) delayn_inst(.clk(daq_clk), .rst_n(rst_n), .in(intr_out_pre), .out(intr_out));
 
-//检测cs上升沿
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        cs_n_posedge <= 1'b0;
-    else if((cs_pos_edge == 1'b1) && (cs_p == 1'b0))  //检测上升沿
-        cs_n_posedge <= 1'b1;
-    else
-        cs_n_posedge <= 1'b0;
-end
-
-//检测cs下降沿
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        cs_n_negedge <= 1'b0;
-    else if((cs_pre_edge == 1'b1) && (cs_n == 1'b0))  //检测下降沿
-        cs_n_negedge <= 1'b1;
-    else
-        cs_n_negedge <= 1'b0;
-end
-
-//检测start_intr的上升沿
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        pos_start_intr <= 1'b0;
-    else
-        pos_start_intr <= start_intr;
-end
-
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        start_intr_posedge <= 1'b0;
-    else if((pos_start_intr == 1'b0) && (start_intr == 1'b1))  //检测上升沿
-        start_intr_posedge <= 1'b1;
-    else
-        start_intr_posedge <= 1'b0;
-end
-
-/*------------------------------产生pre_delay_flag信号--------------------------------*/
-//产生一个pre_delay使能信号，这是为了在第一个周期传输时置起pre_delay_flag的，因此在第一个cs下降沿到来时被拉低
-always @(posedge sys_clk or negedge sys_rst_n) begin    
-    if(sys_rst_n == 1'b0)
-        first_pre_delay_start <= 1'b0;
-    else if((start_intr ==1'b1) && (cs_n == 1'b1))  //当一包传输结束后,这时CS信号已经产生，可以通过CS信号进行控制
-        first_pre_delay_start <= start_intr;         //为保证每次都准确在cs_out前插入时延，在cs_out为1时清零flag和计数器
-    else if(cs_n == 1'b0)
-        first_pre_delay_start <= 1'b0;
-    else
-        first_pre_delay_start <= first_pre_delay_start;
-end
-
-//首先是数据传输前的延时
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        pre_delay_cnt <= 1'b0;
-    //else if((cs_n == 1'b1) && (start_intr == 1'b0))
-    else if(cs_n_posedge == 1'b1)
-        pre_delay_cnt <= 1'b0;
-    else if((pre_delay_flag == 1'b0) && (pos_delay_flag == 1'b1) && (package_cnt != finish_cnt))// && (package_ready == 1'b1) //由于CS信号是根据pre_delay_flag产生的，因此这里不能用CS信号做标志
-        pre_delay_cnt <= pre_delay_cnt + 1'b1;
-    //else if(first_pre_delay_start == 1'b1)
-    //    pre_delay_cnt <=  pre_delay_cnt;    //计数到最大值后保持，直到cs_n拉高后清零
-end
-
-//这个信号何时拉起何时放下不需要配合CS考虑，因为CS信号是在delay_flag拉起后产生的
-always @(posedge sys_clk or negedge sys_rst_n) begin    
-    if(sys_rst_n == 1'b0)
-        pre_delay_flag <= 1'b0;
-    else if(cs_n_posedge ==1'b1)  //当一包传输结束后,这时CS信号已经产生，可以通过CS信号进行控制
-        pre_delay_flag <= 1'b0;         //为保证每次都准确在cs_out前插入时延，在cs_out为1时清零flag和计数器
-    else if(pre_delay_cnt == 8'd100)
-        pre_delay_flag <= 1'b1;
-    //else if(first_pre_delay_start == 1'b1)
-    //    pre_delay_flag <= 1'b1;
-    else if(start_intr_posedge == 1'b1)
-        pre_delay_flag <= 1'b1;
-    else
-        pre_delay_flag <= pre_delay_flag;
-end
-
-/*-----------------------------产生pos_delay_flag信号----------------------------------*/
-//产生包后延时开始信号
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        pos_delay_start <= 1'b0;
-    else if(cs_n_posedge == 1'b1)
-        pos_delay_start <= 1'b1;
-    else if(cs_n_negedge == 1'b1)
-        pos_delay_start <= 1'b0;
-    else
-        pos_delay_start <= pos_delay_start;
-end
-
-//下面配置传输结束后的延时
-always @(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        pos_delay_cnt <= 1'b0;
-    //else if(cs_n == 1'b1)
-    else if(pos_delay_start == 1'b1)
-        pos_delay_cnt <= pos_delay_cnt + 1'b1;
-    //else if(cs_n == 1'b0)   //这里CS信号已经产生了，可以根据CS信号进行配置
-    else if(pos_delay_start == 1'b0)
-        pos_delay_cnt <= 1'b0;
-    else if(pos_delay_cnt == 8'd100)
-        pos_delay_cnt <=  pos_delay_cnt;    //计数到最大值后保持，直到pos_delay_start拉低后清零
-end
-
-//这个信号何时拉起何时放下不需要配合CS考虑，因为CS信号是在delay_flag拉起后产生的
-always @(posedge sys_clk or negedge sys_rst_n) begin    
-    if(sys_rst_n == 1'b0)
-        pos_delay_flag <= 1'b0;
-    //else if(cs_n == 1'b0)  //当一包传输结束后,这时CS信号已经产生，可以通过CS信号进行控制
-    else if(pos_delay_start == 1'b0)
-        pos_delay_flag <= 1'b0;         //为保证每次都准确在cs_out前插入时延，在cs_out为1时清零flag和计数器
-    else if((pos_delay_cnt == 8'd100) && (pos_delay_start == 1'b1))
-        pos_delay_flag <= 1'b1;
-    else
-        pos_delay_flag <= pos_delay_flag;
-end
-
-//产生中断信号
-always @(posedge sys_clk or negedge sys_rst_n) begin    //根据pre_delay_flag和pos_delay_flag的时序
-    if(sys_rst_n == 1'b0)
-        intr_out <= 1'b0;
-    else if(pre_delay_flag == 1'b1)  
-        intr_out <= 1'b1;        
-    else if(pos_delay_flag == 1'b1)
-        intr_out <= 1'b0;
-    else
-        intr_out <= intr_out;
-end
-
-//一包传输结束标志信号
-always @(posedge sys_clk or negedge sys_rst_n) begin    //根据pre_delay_flag和pos_delay_flag的时序
-    if(sys_rst_n == 1'b0)
-        finish_trans <= 1'b0;     
-    //else if(pos_delay_flag == 1'b1)
-    else if(cs_n_posedge == 1'b1)       //这样写就是跟着cs信号走了，但是没有影响
-        finish_trans <= 1'b1;       //一包数据传输结束标志信号
-    else 
-        finish_trans <= 1'b0;
-end
-
-//package计数信号，标志当前FIFO中有多少个FIFO等待发送（实际上最多一个）
-always @(posedge sys_clk or negedge sys_rst_n) begin   
-    if(sys_rst_n == 1'b0)
-        package_cnt <= 1'b0;     
-    else if(package_ready == 1'b1)
-        package_cnt <= package_cnt + 1'b1;       //每当package_ready信号传来（FIFO中新增一包数据）就给计数器加一
-    else 
-        package_cnt <= package_cnt;
-end
-
-//finished package计数信号，标志当前已经有多少个package已经被发送了
-always @(posedge sys_clk or negedge sys_rst_n) begin  
-    if(sys_rst_n == 1'b0)
-        finish_cnt <= 1'b0;     
-    else if(finish_trans == 1'b1)
-        finish_cnt <= finish_cnt + 1'b1;       //每当finish_trans信号传来，表示一包数据已经发送完，这是给计数器加一
-    else 
-        finish_cnt <= finish_cnt;
-end
+assign rd_en = ~cs_n;   //FIFO读信号是ESP32传来的片选信号取反
 
 endmodule

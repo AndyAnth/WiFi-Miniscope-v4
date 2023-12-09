@@ -1,8 +1,8 @@
 module async_ram#(
     parameter   data_width = 8,
-    parameter   data_depth = 30,
+    parameter   data_depth = 60,
     parameter   addr_width = 14,
-    parameter   package_size = 10  //正常应该是38912
+    parameter   package_size = 60  //正常应该是38912
 )
 (
     input                           rst_n  ,
@@ -95,13 +95,13 @@ always@(posedge wr_clk or negedge rst_n)
    end
 
 //这里就把FIFO的总长度改变了，不用受限于RAM容量
-assign full = (wr_addr == data_depth) ? 1 : 0;  
+assign full = (wr_addr == data_depth);  
 //FULL信号波形上早于(wr_addr==data_depth)一个wr_clk周期，正好配合wr_en的变化
 
 //标志已经把FIFO中的数据都读空了
-assign rd_out  = (rd_addr == data_depth) ? 1 : 0;
+assign rd_out  = (rd_addr == data_depth);
 
 //写指针为0表示FIFO是空的(但现在的逻辑是标志读空)
-assign empty = (~valid) ? 1 : 0;
+assign empty = (~valid);
 
 endmodule

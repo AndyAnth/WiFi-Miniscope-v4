@@ -1,50 +1,58 @@
 module ring_fifo#(
-    parameter   data_width = 8,
-    parameter   data_depth = 60,
-    parameter   addr_width = 14,
-    parameter   package_size = 60  //正常应该是38912
+    parameter   data_width = 8 ,     //数据宽度
+    parameter   data_depth = 60,    //FIFO深度
+    parameter   addr_width = 14,    //地址宽度
+    parameter   package_size = 60   //总包长，正常应该是38912
 )
 (
-    input   wire                    rst_n  ,
-    input   wire                    wr_clk ,
-    input   wire                    wr_en  ,
-    input   wire  [data_width-1:0]  din    ,         
-    input   wire                    rd_clk ,
-    input   wire                    rd_en  ,
+    input   wire                    rst_n  ,       //异步复位
+    input   wire                    wr_clk ,       //数据写时钟
+    input   wire                    wr_en  ,       //输入使能
+    input   wire  [data_width-1:0]  din    ,       //输入数据
+    input   wire                    rd_clk ,       //数据读时钟
+    input   wire                    rd_en  ,       //输出使能
 
-    output   wire                   valid  ,
-    output   wire [data_width-1:0]  dout   ,
-    output   reg                    package_ready, //指示待发送数据包已准备好
-    output   wire                   empty  ,
-    output   wire                   empty1 ,
-    output   wire                   full1  ,
-    output   wire                   empty2 ,
-    output   wire                   full2  ,
-    output   wire                   wr_en1 ,
-    output   wire                   wr_en2 ,
-    output   wire                   rd_en1 ,
-    output   wire                   rd_en2 ,
-    output   wire                   rd_out ,
-    output   reg                    rd_sel ,
-    output   wire [data_width-1:0]  dout1  ,
-    output   wire [data_width-1:0]  dout2  ,  
-    output   wire                   valid1 ,
-    output   wire                   valid2 ,
-    output   reg                    emp_sel,
-    output   wire [addr_width-1:0]  wr_addr1,
-    output   wire [addr_width-1:0]  rd_addr1,
-    output   wire [addr_width-1:0]  wr_addr2,
-    output   wire [addr_width-1:0]  rd_addr2,
-    output   reg                    ram_wr_sel,
-    output   reg                    ram1_rd_sel,
-    output   reg                    ram2_rd_sel
+    output   wire                   valid  ,       //数据有效标志(在FIFO中数据发完后会重复发送最后一个bit，这时只需要加valid判断即可)
+    output   wire [data_width-1:0]  dout   ,       //输出数据
+    output   reg                    package_ready, //FIFO中存入一包数据标志
+    output   wire                   rd_out         //读空标志信号
 );
 
-//两个FIFO间选择的使能信号
-//reg    wr_en1;
-//reg    wr_en2;
-//reg    rd_en1;
-//reg    rd_en2;
+//空标志信号
+wire                   empty      ;
+wire                   empty1     ;
+wire                   empty2     ;
+
+//满标志信号
+wire                   full1      ;
+wire                   full2      ;
+
+//两组RAM读写控制信号
+wire                   wr_en1     ;
+wire                   wr_en2     ;
+wire                   rd_en1     ;
+wire                   rd_en2     ;
+reg                    rd_sel     ;
+
+//两组RAM各自的数据输出
+wire [data_width-1:0]  dout1      ;
+wire [data_width-1:0]  dout2      ;  
+
+//数据有效标志
+wire                   valid1     ;
+wire                   valid2     ;
+reg                    emp_sel    ;
+
+//两组RAM中读写地址指针
+wire [addr_width-1:0]  wr_addr1   ;
+wire [addr_width-1:0]  rd_addr1   ;
+wire [addr_width-1:0]  wr_addr2   ;
+wire [addr_width-1:0]  rd_addr2   ;
+
+//两组RAM控制使能信号
+reg                    ram_wr_sel ;
+reg                    ram1_rd_sel;
+reg                    ram2_rd_sel;
 
 /*------------检测rd_en信号边沿------------*/
 reg     rd_en_pre;
@@ -86,8 +94,8 @@ end
 
 /*------------实现两组FIFO交替写入------------*/
 /*在写时钟wr_clk下交替写入两个FIFO*/
-//两个RAM的选择信号(写满了一个就写另一个，读这个)
-always@(posedge wr_clk or negedge rst_n)    
+//两个RAM的选择标志信号
+always@(posedge wr_clk or negedge rst_n)    //这部分的目的是保证连续写入一个未写满的FIFO
     if(!rst_n)          //初始化
         ram_wr_sel <= 1'b0;
     else if(full1)   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
@@ -101,17 +109,18 @@ assign wr_en1 = (~ram_wr_sel) && (wr_en);
 assign wr_en2 = (ram_wr_sel) && (wr_en);
 
 /*在读时钟rd_clk下交替读取两个FIFO*/
-//由于读时钟频率远远高于写时钟，因此一个FIFO满了以后会立即被读取，而不会出现跳过一段数据的情况
-always@(posedge rd_clk or negedge rst_n)    
+//由于读时钟频率远远高于写时钟，所以数据不会出现读不完的情况
+//数据读出是根据package_ready信号来标志的，package_ready置起就会触发ESP32中断，产生CS信号
+always@(posedge rd_clk or negedge rst_n)    //这部分的目的是保证连续读取一个未读完的FIFO
     if(!rst_n) begin          //初始化
         ram1_rd_sel <= 1'b0;
         ram2_rd_sel <= 1'b0;
     end
-    else if(full1 && rd_en) begin   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
+    else if(full1) begin   //FIFO1写满后使能FIFO2写入，FIFO1开始读出
         ram1_rd_sel <= 1'b1; 
         ram2_rd_sel <= 1'b0; 
     end   
-    else if(full2 && rd_en) begin  //FIFO2写满后使能FIFO1写入，FIFO2开始读出
+    else if(full2) begin  //FIFO2写满后使能FIFO1写入，FIFO2开始读出
         ram1_rd_sel <= 1'b0;
         ram2_rd_sel <= 1'b1;
     end
