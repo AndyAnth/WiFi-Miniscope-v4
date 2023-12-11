@@ -2,10 +2,9 @@
 
 module  Sys#(
     parameter   data_width = 8,
-    parameter   data_depth = 300,
+    parameter   data_depth = 60,
     parameter   addr_width = 14,
-    parameter   package_size = 300 ,
-    parameter   multiline_num = 8
+    parameter   package_size = 60
 )
 (
     input   wire            sys_clk     ,   //系统时钟，频率50MHz
@@ -30,23 +29,58 @@ module  Sys#(
     output  wire            wr_full     ,
 
     output  wire    [7:0]   data_in     ,
-    input   wire            cs_n        ,   //片选信号
+    output  reg             cs_n        ,   //片选信号
     input   wire            sck         ,   //串行时钟
     output  wire            miso        ,   //主输出从输入数据
     output  wire    [2:0]   cnt_bit     ,   //比特计数器
-    output  reg     [2:0]   state       ,
+    output  wire    [2:0]   state       ,
     output  wire            daq_clk     ,
-    output  reg     [2:0]   sck_cnt     ,
     output  wire            valid       ,
-    output  reg             rd_clk      ,
+    output  wire            rd_clk      ,
     output  wire            package_ready,
     output  wire            clk_out     ,
     output  wire            wr_en       ,
     output  wire            rd_en       ,
+    output  wire            rd_out      ,
 
-    output  wire            intr_out    
+    output  wire            intr_out    ,
+    output   wire                   empty      ,
+    output   wire                   empty1     ,
+    output   wire                   empty2     ,
+    output   wire                   full1      ,
+    output   wire                   full2      ,
+    output   wire                   wr_en1     ,
+    output   wire                   wr_en2     ,
+    output   wire                   rd_en1     ,
+    output   wire                   rd_en2     ,
+    output   wire                   rd_sel     ,
+    output   wire [data_width-1:0]  dout1      ,
+    output   wire [data_width-1:0]  dout2      ,  
+    output   wire                   valid1     ,
+    output   wire                   valid2     ,
+    output   wire                   emp_sel    ,
+    output   wire [addr_width-1:0]  wr_addr1   ,
+    output   wire [addr_width-1:0]  rd_addr1   ,
+    output   wire [addr_width-1:0]  wr_addr2   ,
+    output   wire [addr_width-1:0]  rd_addr2   ,
+    output   wire                   ram_wr_sel ,
+    output   wire                   ram1_rd_sel,
+    output   wire                   ram2_rd_sel,
+    output   wire                   frame_vaild,
+    output   wire                   line_vaild  
 
 );
+
+always @(posedge sys_clk or negedge sys_rst_n) begin
+    if(!sys_rst_n)
+        cs_n <= 1'b1;
+    else if(package_ready )
+        cs_n <= 1'b0;
+    else if(rd_out)
+        cs_n <= 1'b1;
+    else 
+        cs_n <= cs_n;
+end
 
 //parameter define
 parameter   FOT           =   3'b001 ,   //帧空闲状态
@@ -62,15 +96,13 @@ wire            data_in5    ;
 wire            data_in6    ;
 wire            data_in7    ;
 //wire            clk_out     ;
-wire            frame_vaild ;
-wire            line_vaild  ;
 
 DATA_GEN#(
     .CNT20_MAX  ( 4  ),
     .CNT10_MAX  ( 9  ),
     .CNT5_MAX   ( 19 ),
     .LINE_MAX   (100 ),
-    .FRAME_MAX  (2000)
+    .FRAME_MAX  (50)
 ) DATA_GEN_inst
 (
     .sys_clk     (sys_clk    ),   //系统时钟，频率50MHz
@@ -142,66 +174,51 @@ ring_fifo#(
     .valid         (    valid    ),       //数据有效标志(在FIFO中数据发完后会重复发送最后一个bit，这时只需要加valid判断即可)
     .dout          (   data_out  ),       //输出数据
     .package_ready (package_ready),       //FIFO中存入一包数据标志
-    .rd_out        (    rd_out   )        //读空标志信号
+    .rd_out        (    rd_out   ),        //读空标志信号
+
+    .empty         ( empty       ),
+    .empty1        ( empty1      ),
+    .empty2        ( empty2      ),
+    .full1         ( full1       ),
+    .full2         ( full2       ),
+    .wr_en1        ( wr_en1      ),
+    .wr_en2        ( wr_en2      ),
+    .rd_en1        ( rd_en1      ),
+    .rd_en2        ( rd_en2      ),
+    .rd_sel        ( rd_sel      ),
+    .dout1         ( dout1       ),
+    .dout2         ( dout2       ),
+    .valid1        ( valid1      ),
+    .valid2        ( valid2      ),
+    .emp_sel       ( emp_sel     ),
+    .wr_addr1      ( wr_addr1    ),
+    .rd_addr1      ( rd_addr1    ),
+    .wr_addr2      ( wr_addr2    ),
+    .rd_addr2      ( rd_addr2    ),
+    .ram_wr_sel    ( ram_wr_sel  ),
+    .ram1_rd_sel   ( ram1_rd_sel ),
+    .ram2_rd_sel   ( ram2_rd_sel )
 );
 
-//state:两段式状态机
-always@(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        state   <=  FOT;    //frame_valid不使能时state处于FOT状态
-    else
-    case(state)
-        FOT:   
-                if((frame_vaild == 1'b1) && (line_vaild == 1'b1))  
-                    state <= WR_EN;   
-                else if((frame_vaild == 1'b1) && (line_vaild == 1'b0))  
-                    state <= ROT; 
-                else
-                    state <= FOT;  
+//数据采集状态机
+state_ctrl#(.FOT (FOT), .WR_EN (WR_EN), .ROT (ROT))
+state_ctrl_inst(
+    .clk         (  sys_clk  ),
+    .rst_n       ( sys_rst_n ),
+    .line_vaild  (line_vaild ),
+    .frame_vaild (frame_vaild),
 
-        ROT:    if(line_vaild == 1'b1)
-                    state <= WR_EN; 
-                else if(frame_vaild == 1'b0)
-                    state <= FOT;       
-                else
-                    state <= ROT;   //ROT的default状态
-                    
-        WR_EN:
-                if(line_vaild == 1'b0)
-                    state <= ROT;       //frame_valid使能但line_valid失能时进入ROT行空闲状态
-                else if(frame_vaild == 1'b0)
-                    state <= FOT;       //frame_valid失能时直接回到FOT状态
-                else
-                    state <= WR_EN;    //保持读取状态
-                    
-        default:    state   <=  FOT;
-    endcase
-end
+    .state       (  state    )
+);
 
-//sck_cnt的作用是标记当前已发送多少数据，为了产生rd_clk时钟
-always@(posedge sck or negedge sys_rst_n)
-    if(sys_rst_n == 1'b0) 
-        sck_cnt <=  3'd0;
-    else
-        sck_cnt <=  sck_cnt + 1'b1;
-
-//rd_sck是sck八分频后的时钟，指示fifo的读出周期
-always@(posedge sck or negedge sys_rst_n)  //在sck上升沿产生rd_clk
-    if(sys_rst_n == 1'b0) 
-        rd_clk <=  1'b0;
-    else if(sck_cnt == 3'd7)
-        rd_clk <=  1'b1;
-    else
-        rd_clk <= 1'b0;
+//FIFO读时钟产生，8位数据读出一次
+sck2rd_clk sck2rd_clk_inst(.sck(sck), .sys_rst_n(sys_rst_n), .rd_clk(rd_clk));
 
 //产生写使能信号wr_en
 assign wr_en = line_vaild;
 
 //对package_ready进行三个daq_clk的延迟得到ESP32中断触发信号intr_out
-wire   intr_out_pre;
-assign intr_out_pre = package_ready;
-
-delayn#(.n(3)) delayn_inst(.clk(daq_clk), .rst_n(rst_n), .in(intr_out_pre), .out(intr_out));
+delayn#(.n(3)) delayn_inst(.clk(daq_clk), .rst_n(sys_rst_n), .in(package_ready), .out(intr_out));
 
 assign rd_en = ~cs_n;   //FIFO读信号是ESP32传来的片选信号取反
 

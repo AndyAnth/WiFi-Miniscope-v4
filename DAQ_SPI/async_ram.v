@@ -41,7 +41,7 @@ always@(posedge wr_clk or negedge rst_n)
         if(!rst_n)
             wr_addr <= 1'b0;
         else if(wr_en && (~full))
-            wr_addr <= wr_addr + 1;
+            wr_addr <= wr_addr + 1'b1;
         else if(full)
             wr_addr <= 1'b0;    //当写满后把写指针归零准备从头写
         else 
@@ -53,7 +53,7 @@ always@(posedge rd_clk or negedge rst_n)
         if(!rst_n)
             rd_addr <= 1'b0;
         else if((rd_en) && (~rd_out))
-            rd_addr <= rd_addr + 1;
+            rd_addr <= rd_addr + 1'b1;
         else if((rd_out) && (~rd_en)) //这个是防止在另一个FIFO写入的时候，当前FIFO读空后会重置rd_addr而从头开始读取
             rd_addr <= 1'b0;    //当读完后把读指针归零准备从头读
         else

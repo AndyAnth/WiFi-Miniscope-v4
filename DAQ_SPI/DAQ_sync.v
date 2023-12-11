@@ -17,12 +17,11 @@ module  DAQ_sync
     input   wire            frame_vaild ,  //hsync
     input   wire            line_vaild  ,  //vsync
 
-    input   wire    [2:0]   state       ,
+    input   wire    [2:0]    state       ,
 
 
     output  reg     [7:0]   data_in     ,
-    output  wire             daq_clk     ,
-    output  reg     [9:0]   rec_cnt
+    output  wire            daq_clk    
 
 );
 
@@ -31,14 +30,9 @@ parameter   FOT           =   3'b001 ,   //帧使能状态
             WR_EN         =   3'b010 ,   //帧/行使能状态
             ROT           =   3'b100 ;   //行使能状态
 
-//将pclk在sys_clk下打拍(前提是F_sys_clk > F_pclk)
-/*always@(posedge sys_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        daq_clk <= 1'b0;
-    else
-        daq_clk <= clk_out;
-end*/
+
 assign daq_clk = clk_out;
+
 
 //在pclk打拍后的rd_sck下对data0~7进行采样
 always @(posedge daq_clk or negedge sys_rst_n) begin
@@ -55,17 +49,6 @@ always @(posedge daq_clk or negedge sys_rst_n) begin
         data_in[6] <= data_in6;
         data_in[7] <= data_in7;
     end
-end
-
-always@(posedge daq_clk or negedge sys_rst_n) begin
-    if(sys_rst_n == 1'b0)
-        rec_cnt <= 1'b0;
-    else if(line_vaild == 1'b1)
-        rec_cnt <= rec_cnt + 1'b1;
-    //else if(frame_vaild == 1'b0)    //这里改过，原来的版本没有这个判断条件
-    //    rec_cnt <= rec_cnt;     //这会导致两帧之间出现一次过长的CS拉低时间
-    else
-        rec_cnt <= 1'b0;
 end
 
 endmodule
