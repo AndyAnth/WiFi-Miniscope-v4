@@ -1,59 +1,48 @@
 module ring_fifo#(
     parameter   data_width = 8 ,     //数据宽度
-    parameter   data_depth = 60,    //FIFO深度
+    parameter   data_depth = 4864,    //FIFO深度
     parameter   addr_width = 14,    //地址宽度
-    parameter   package_size = 60   //总包长，正常应该是38912
+    parameter   package_size = 4864   //总包长，正常应该是38912
 )
 (
+    input   wire                    sys_clk,
     input   wire                    rst_n  ,       //异步复位
     input   wire                    wr_clk ,       //数据写时钟
     input   wire                    wr_en  ,       //输入使能
     input   wire  [data_width-1:0]  din    ,       //输入数据
     input   wire                    rd_clk ,       //数据读时钟
     input   wire                    rd_en  ,       //输出使能
+    input   wire                    intr_out,
 
     output   wire                   valid  ,       //数据有效标志(在FIFO中数据发完后会重复发送最后一个bit，这时只需要加valid判断即可)
     output   wire [data_width-1:0]  dout   ,       //输出数据
-    output   reg                    package_ready, //FIFO中存入一包数据标志
-    output   wire                   rd_out         //读空标志信号
+    output   wire                   package_ready, //FIFO中存入一包数据标志
+    output   wire                   rd_out        , //读空标志信号
+
+    output   wire                   empty      ,
+    output   wire                   empty1     ,
+    output   wire                   empty2     ,
+    output   wire                   full1      ,
+    output   wire                   full2      ,
+    output   wire                   wr_en1     ,
+    output   wire                   wr_en2     ,
+    output   wire                   rd_en1     ,
+    output   wire                   rd_en2     ,
+    output   reg                    rd_sel     ,
+    output   wire [data_width-1:0]  dout1      ,
+    output   wire [data_width-1:0]  dout2      ,  
+    output   wire                   valid1     ,
+    output   wire                   valid2     ,
+    output   reg                    emp_sel    ,
+    output   wire [addr_width-1:0]  wr_addr1   ,
+    output   wire [addr_width-1:0]  rd_addr1   ,
+    output   wire [addr_width-1:0]  wr_addr2   ,
+    output   wire [addr_width-1:0]  rd_addr2   ,
+    output   reg                    ram_wr_sel ,
+    output   reg                    ram1_rd_sel,
+    output   reg                    ram2_rd_sel
+
 );
-
-//空标志信号
-wire                   empty      ;
-wire                   empty1     ;
-wire                   empty2     ;
-
-//满标志信号
-wire                   full1      ;
-wire                   full2      ;
-
-//两组RAM读写控制信号
-wire                   wr_en1     ;
-wire                   wr_en2     ;
-wire                   rd_en1     ;
-wire                   rd_en2     ;
-reg                    rd_sel     ;
-
-//两组RAM各自的数据输出
-wire [data_width-1:0]  dout1      ;
-wire [data_width-1:0]  dout2      ;  
-
-//数据有效标志
-wire                   valid1     ;
-wire                   valid2     ;
-reg                    emp_sel    ;
-
-//两组RAM中读写地址指针
-wire [addr_width-1:0]  wr_addr1   ;
-wire [addr_width-1:0]  rd_addr1   ;
-wire [addr_width-1:0]  wr_addr2   ;
-wire [addr_width-1:0]  rd_addr2   ;
-
-//两组RAM控制使能信号
-reg                    ram_wr_sel ;
-reg                    ram1_rd_sel;
-reg                    ram2_rd_sel;
-
 /*------------检测rd_en信号边沿------------*/
 reg     rd_en_pre;
 reg     rd_en_posedge;
@@ -105,7 +94,7 @@ always@(posedge wr_clk or negedge rst_n)    //这部分的目的是保证连续写入一个未写
     else 
         ram_wr_sel <= ram_wr_sel;
 
-assign wr_en1 = (~ram_wr_sel) && (wr_en);
+assign wr_en1 = (!ram_wr_sel) && (wr_en);
 assign wr_en2 = (ram_wr_sel) && (wr_en);
 
 /*在读时钟rd_clk下交替读取两个FIFO*/
@@ -163,14 +152,15 @@ assign empty = (emp_sel) ? empty1 : empty2;
 assign rd_out = (rd_sel) ? rd_out2 : rd_out1;
 
 /*生成package_ready信号*/
-always@(posedge wr_clk or negedge rst_n)    
+assign package_ready = ((full1 == 1'b1) || (full2 == 1'b1));
+/*always@(posedge wr_clk or negedge rst_n)    
     if(!rst_n) 
         package_ready <= 1'b0;
     else if((full1 == 1'b1) || (full2 == 1'b1))
         package_ready <= 1'b1;
     else 
         package_ready <= 1'b0; //该逻辑保证package_ready信号保持一个wr_clk周期
-
+*/
 /*下面的两个模块中，除了使能信号外全都接到顶层模块信号中*/
 async_ram#(
     .data_width   ( data_width   ),
@@ -179,12 +169,14 @@ async_ram#(
     .package_size ( package_size )  //正常应该是38912
 )async_ram_inst1
 (
+    .sys_clk      (  sys_clk  ),
     .rst_n        (  rst_n    ),
     .wr_clk       (  wr_clk   ),
     .wr_en        (  wr_en1   ),
     .din          (  din      ),         
     .rd_clk       (  rd_clk   ),
     .rd_en        (  rd_en1   ),
+    .intr_out     ( intr_out  ),
 
     .valid        (  valid1   ),
     .dout         (  dout1    ),
@@ -203,12 +195,14 @@ async_ram#(
     .package_size ( package_size )  //正常应该是38912
 )async_ram_inst2
 (
+    .sys_clk      (  sys_clk  ),
     .rst_n        (  rst_n    ),
     .wr_clk       (  wr_clk   ),
     .wr_en        (  wr_en2   ),
     .din          (  din      ),         
     .rd_clk       (  rd_clk   ),
     .rd_en        (  rd_en2   ),
+    .intr_out     ( intr_out  ),
 
     .valid        (  valid2   ),
     .dout         (  dout2    ),

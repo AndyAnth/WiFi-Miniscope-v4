@@ -2,30 +2,82 @@
 
 module  tb_DAQ_SPI#(
     parameter   data_width = 8,
-    parameter   package_size = 2000
+    parameter   data_depth = 1000,
+    parameter   addr_width = 14,
+    parameter   package_size = 1000
 );
 
-reg            sys_clk      ;   //系统时钟，频率50MHz
-reg            sys_rst_n    ;   //复位信号,低电平有效
+reg            sys_clk     ;   //系统时钟，频率50MHz
+reg            sys_rst_n   ;   //复位信号,低电平有效
 wire    [7:0]  data_out    ;
-wire           rd_empty    ;
-wire           wr_full     ;
+
 wire    [7:0]  data_in     ;
 reg            cs_n        ;   //片选信号
 reg            sck         ;   //串行时钟
 wire           miso        ;   //主输出从输入数据
-wire    [2:0]  cnt_bit     ;    //比特计数器
-wire    [2:0]  state       ;
-wire           daq_clk     ;
-wire    [2:0]  sck_cnt     ;
-wire           start_trans ;
+
+reg            monitor     ;
+
+wire           intr_out    ;
+
+wire           data_in0    ;
+wire           data_in1    ;
+wire           data_in2    ;
+wire           data_in3    ;
+wire           data_in4    ;
+wire           data_in5    ;
+wire           data_in6    ;
+wire           data_in7    ;
+wire           clk_out     ;  //像素同步信号
+wire           frame_vaild ;  //帧同步信号
+wire           line_vaild  ;  //行同步信号
+
+wire           status_led  ;
+wire           monitor_led ;
+wire           package_ready;
+
 wire           valid       ;
 wire           rd_clk      ;
-wire           intr_out    ;
-wire           package_ready;
-wire           clk_out;
-wire           pre_delay_flag;
-wire           pos_delay_flag;
+wire           rd_en       ;
+wire           rd_out      ;
+wire           daq_clk     ;
+wire [addr_width-1:0]  rd_addr1;
+wire [addr_width-1:0]  wr_addr1;
+wire [addr_width-1:0]  wr_addr2;
+wire [addr_width-1:0]  rd_addr2;
+wire            rd_en1     ;
+wire            full1      ;
+wire            full2      ;
+wire            wr_en1     ;
+wire            wr_en2     ;
+
+wire            ram_wr_sel;
+wire            ram1_rd_sel;
+wire            ram2_rd_sel;
+
+DATA_GEN#(
+    .CNT20_MAX  ( 4  ),
+    .CNT10_MAX  ( 9  ),
+    .CNT5_MAX   ( 19 ),
+    .LINE_MAX   (100 ),
+    .FRAME_MAX  (50)
+) DATA_GEN_inst
+(
+    .sys_clk     (sys_clk    ),   //系统时钟，频率50MHz
+    .sys_rst_n   (sys_rst_n  ),   //复位信号,低电平有效
+
+    .data_in0    (data_in0   ),
+    .data_in1    (data_in1   ),
+    .data_in2    (data_in2   ),
+    .data_in3    (data_in3   ),
+    .data_in4    (data_in4   ),
+    .data_in5    (data_in5   ),
+    .data_in6    (data_in6   ),
+    .data_in7    (data_in7   ),
+    .clk_out     (clk_out    ),
+    .frame_vaild (frame_vaild),
+    .line_vaild  (line_vaild )
+);
 
 initial
     begin
@@ -36,8 +88,9 @@ initial
 
         #50
         sys_rst_n  = 1;
+        #30  monitor = 1;
         cs_n       = 0;
-
+/*
         #3000
 
         cs_n = 1;
@@ -46,41 +99,62 @@ initial
         cs_n = 0;
         
         #3000
-        cs_n = 1;
+        cs_n = 1;*/
     end
 
 always  #10 sys_clk  <=  ~sys_clk;
-always  #20 sck  <=  ~sck;
+always  #2 sck  <=  ~sck;
 
 Sys#(
-    .data_width     (8   ),
-    .package_size   (10)
+    .data_width     (data_width  ),
+    .data_depth     (data_depth  ),
+    .addr_width     (addr_width  ),
+    .package_size   (package_size)
 )Sys_inst
 (
     .sys_clk     (sys_clk    ),   //系统时钟，频率50MHz
     .sys_rst_n   (sys_rst_n  ),   //复位信号,低电平有效
 
+    .data_in0    (data_in0   ),
+    .data_in1    (data_in1   ),
+    .data_in2    (data_in2   ),
+    .data_in3    (data_in3   ),
+    .data_in4    (data_in4   ),
+    .data_in5    (data_in5   ),
+    .data_in6    (data_in6   ),
+    .data_in7    (data_in7   ),
+    .clk_out     (clk_out    ),
+    .frame_vaild (frame_vaild),
+    .line_vaild  (line_vaild ),
+    .monitor     (monitor    ),
     .data_out    (data_out   ),
-    .rd_empty    (rd_empty   ),
-    .wr_full     (wr_full    ),
 
     .data_in     (data_in    ),
-    .cs_n        (cs_n       ),   //片选信号
+    .cs_n        (1'b0       ),   //片选信号
     .sck         (sck        ),   //串行时钟
     .miso        (miso       ),   //主输出从输入数据
-    .cnt_bit     (cnt_bit    ),    //比特计数器
-    .state       (state      ),
-    .daq_clk     (daq_clk    ),
-    .sck_cnt     (sck_cnt    ),
-    .start_trans (start_trans),
-    .valid       (valid      ),
-    .rd_clk      (rd_clk     ),
+    .status_led  (status_led ),
+    .monitor_led (monitor_led),
+    .intr_out    (intr_out   ),
     .package_ready(package_ready),
-    .clk_out     (clk_out    ),
-    .pre_delay_flag (pre_delay_flag),
-    .pos_delay_flag (pos_delay_flag),
-    .intr_out    (intr_out   )
+    .valid       (valid  ),
+    .rd_clk      (rd_clk ),
+    .rd_en       (rd_en  ),
+    .rd_out      (rd_out ),
+    .daq_clk     (daq_clk),
+    .rd_addr1     (rd_addr1),
+    .wr_addr1     (wr_addr1),
+    .wr_addr2     (wr_addr2),
+    .rd_addr2     (rd_addr2),
 
+    .rd_en1      (rd_en1),
+    .full1       (full1),
+    .full2       (full2),
+    .wr_en1      (wr_en1),
+    .wr_en2      (wr_en2),
+    .ram_wr_sel  (ram_wr_sel),
+    .ram1_rd_sel (ram1_rd_sel),
+    .ram2_rd_sel (ram2_rd_sel)
 );
 
 endmodule

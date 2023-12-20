@@ -1,5 +1,5 @@
 module delayn#(
-    parameter n = 3
+    parameter n = 5
 )
 (
     input   wire    clk,        //input clock
@@ -17,5 +17,6 @@ always @(posedge clk or negedge rst_n) begin
         temp <= {temp[n-2:0], in};
 end
 
-assign out = temp[n-1] | temp[n-2] | temp[n-3];
+assign out = temp[n-1] | temp[n-2] | temp[n-3] | temp[n-4] | temp[n-5];
+
 endmodule
